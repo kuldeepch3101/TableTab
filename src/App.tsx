@@ -2,15 +2,19 @@ import { useState, useMemo, useEffect } from "react";
 import { createDiningSession, createOrder, createServiceRequest, getMenu, getSessionOrders } from "./lib/tabletabApi";
 
 const assetPathPrefix = "/assets";
-const imgHero = `${assetPathPrefix}/f7645.png`;
-const imgButterChicken = `${assetPathPrefix}/menu-butter-chicken.jpg`;
-const imgPaneerTikka = `${assetPathPrefix}/menu-paneer-tikka.jpg`;
-const imgChickenBiryani = `${assetPathPrefix}/menu-chicken-biryani.jpg`;
-const imgRoganJosh = `${assetPathPrefix}/menu-rogan-josh.jpg`;
-const imgMasalaDosa = `${assetPathPrefix}/menu-masala-dosa.jpg`;
-const imgSamosa = `${assetPathPrefix}/menu-samosa.jpg`;
-const imgGarlicNaan = `${assetPathPrefix}/menu-garlic-naan.jpg`;
-const imgMangoLassi = `${assetPathPrefix}/menu-mango-lassi.jpg`;
+
+// The original Figma asset paths are kept for the rest of the UI, but the
+// menu food photos are hosted remotely because the original image files are
+// not present in this project. These URLs are temporary menu-photo fallbacks.
+const imgHero = "https://images.unsplash.com/photo-1601050690597-df0568f70950?auto=format&fit=crop&w=1200&q=85";
+const imgButterChicken = "https://im.whatshot.in/img/2020/Jul/1-1595376176.png?cc=1&h=630&w=1200&wm=1";
+const imgPaneerTikka = "https://media-assets.swiggy.com/swiggy/image/upload/fl_lossy%2Cf_auto%2Cq_auto%2Cw_300%2Ch_300%2Ce_grayscale%2Cc_fit/FOOD_CATALOG/IMAGES/CMS/2024/4/27/5d3b4547-f365-4dea-a29e-05a0c5f732f6_f39bf5ef-9b1b-4fd3-b7bd-afc25ae71605.jpg";
+const imgChickenBiryani = "https://explorerest.sgp1.digitaloceanspaces.com/restaurant/14981/gallery/kitch-kashmiri-chai-gallery-7jpeg-3.jpeg";
+const imgRoganJosh = "https://i0.wp.com/khyenchyen.net/wp-content/uploads/2022/06/Mutton-Rogan-Josh-by-PictureTheRecipe-1.jpg?resize=750%2C712&ssl=1";
+const imgMasalaDosa = "https://media-assets.swiggy.com/swiggy/image/upload/fl_lossy%2Cf_auto%2Cq_auto%2Cw_366/RX_THUMBNAIL/IMAGES/VENDOR/2026/4/12/44def03d-76b6-4da2-95fc-b21781615b8d_1345067%20%281%29%20%281%29.jpg";
+const imgSamosa = "https://img.onmanorama.com/content/dam/mm/en/food/features/images/2021/9/12/samosa.jpg/photos/4x3/photo.jpg";
+const imgGarlicNaan = "https://154630363.cdn6.editmysite.com/uploads/1/5/4/6/154630363/LX2DJA7DAEGJRLN5YQOMJ7OP.png?optimize=medium&width=2400";
+const imgMangoLassi = "https://static.wixstatic.com/media/1a22d3_2ad83af717dc43a28b10e23538a6e88c~mv2.png/v1/fill/w_969%2Ch_918%2Cal_c%2Cq_90/1a22d3_2ad83af717dc43a28b10e23538a6e88c~mv2.png";
 const imgCircleHelp = `${assetPathPrefix}/572f7.svg`;
 const imgBell = `${assetPathPrefix}/f2ace.svg`;
 const imgEllipse = `${assetPathPrefix}/55e96.svg`;
@@ -41,8 +45,8 @@ const imgCheck = `${assetPathPrefix}/e3364.svg`;
 const imgMail = `${assetPathPrefix}/3b64d.svg`;
 
 type Tab = "menu" | "order" | "bill";
-type OrderStatus = "cart" | "placed" | "preparing" | "served";
-type BillStatus = "none" | "requested" | "settled";
+type OrderStatus = "cart" | "placed" | "preparing" | "ready" | "served";
+type BillStatus = "none" | "requested";
 type SpiceLevel = "mild" | "medium" | "hot";
 
 interface MenuItem {
@@ -62,21 +66,32 @@ interface CartItem {
   spiceLevel?: SpiceLevel;
 }
 
-const MENU: MenuItem[] = [
-  { id: "butter-chicken", name: "Butter chicken", desc: "Tandoori chicken, tomato makhani, fenugreek", price: 24, badge: "GF", img: imgButterChicken, category: "Popular" },
-  { id: "paneer-tikka", name: "Paneer tikka", desc: "Charred peppers, red onion, mint chutney", price: 18, badge: "V", img: imgPaneerTikka, category: "Popular" },
-  { id: "biryani", name: "Chicken dum biryani", desc: "Basmati rice, saffron, crispy onions, raita", price: 22, badge: "GF", img: imgChickenBiryani, category: "Mains" },
-  { id: "rogan-josh", name: "Lamb rogan josh", desc: "Kashmiri chilli, cardamom, slow-cooked lamb", price: 27, badge: "GF", img: imgRoganJosh, category: "Mains" },
-  { id: "dosa", name: "Masala dosa", desc: "Crisp rice crêpe, spiced potato, sambar", price: 16, badge: "V", img: imgMasalaDosa, category: "Mains" },
-  { id: "samosa", name: "Vegetable samosa", desc: "Potato, peas, tamarind and mint chutneys", price: 10, badge: "V", img: imgSamosa, category: "Starters" },
-  { id: "naan", name: "Garlic butter naan", desc: "Tandoor-baked bread, roasted garlic, coriander", price: 6, badge: "V", img: imgGarlicNaan, category: "Breads" },
-  { id: "lassi", name: "Mango lassi", desc: "Alphonso mango, yoghurt, cardamom", price: 8, badge: "V", img: imgMangoLassi, category: "Drinks" },
-];
-
-const CATEGORIES = ["All", "Popular", "Starters", "Mains", "Breads", "Drinks"];
+const DEFAULT_CATEGORIES = ["All"];
 
 const TAX = 0.085;
 const SERVICE = 0.05;
+
+function getMenuImage(menuItem: any): string {
+  const id = String(menuItem?.id ?? "").toLowerCase();
+  const name = String(menuItem?.name ?? "").toLowerCase();
+  const backendImage = String(menuItem?.img ?? "").trim();
+
+  // Prefer a real URL from the database when one is configured. The seeded
+  // project currently contains /assets/... paths, but those files are absent,
+  // so map the seeded item to the matching remote photo instead.
+  if (backendImage && /^https?:\/\//i.test(backendImage)) return backendImage;
+
+  if (id.includes("butter-chicken") || name.includes("butter chicken")) return imgButterChicken;
+  if (id.includes("paneer-tikka") || name.includes("paneer tikka")) return imgPaneerTikka;
+  if (id.includes("biryani") || name.includes("biryani")) return imgChickenBiryani;
+  if (id.includes("rogan-josh") || name.includes("rogan josh")) return imgRoganJosh;
+  if (id === "dosa" || name.includes("masala dosa")) return imgMasalaDosa;
+  if (id === "samosa" || name.includes("samosa")) return imgSamosa;
+  if (id === "naan" || name.includes("naan")) return imgGarlicNaan;
+  if (id === "lassi" || name.includes("lassi")) return imgMangoLassi;
+
+  return imgHero;
+}
 
 function calcTotals(cart: CartItem[]) {
   const subtotal = cart.reduce((s, c) => s + c.item.price * c.qty, 0);
@@ -111,15 +126,123 @@ export default function App({ hotel, table }: AppProps) {
   const [orderNote, setOrderNote] = useState("");
   const [showNoteInput, setShowNoteInput] = useState(false);
   const [helpVisible, setHelpVisible] = useState(false);
-  const [menu, setMenu] = useState<MenuItem[]>(MENU);
+  // Keep the UI menu empty until the restaurant menu is loaded from the backend.
+  const [menu, setMenu] = useState<MenuItem[]>([]);
+  const [menuLoading, setMenuLoading] = useState(true);
+  const [menuError, setMenuError] = useState<string | null>(null);
+
+  // cart = items that have not been submitted yet.
+  // orderedItems = items already submitted during this dining session.
+  const [orderedItems, setOrderedItems] = useState<CartItem[]>([]);
+
   const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [sessionLoading, setSessionLoading] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const [backendOrderId, setBackendOrderId] = useState<string | null>(null);
+  const [orderSubmitting, setOrderSubmitting] = useState(false);
 
   useEffect(() => {
-    if (!hotel) return;
-    getMenu(hotel.id).then(rows => setMenu(rows.map((m: any) => ({ id: m.id, name: m.name, desc: m.desc, price: m.price, badge: m.badge, img: m.img, category: m.category })))).catch(err => console.warn("Unable to load menu", err));
-    const token = new URLSearchParams(window.location.search).get("token");
-    if (token) createDiningSession(token, 2).then(session => setSessionToken(session.public_token)).catch(err => console.warn("Unable to start QR dining session", err));
+    if (!hotel?.id) return;
+
+    let cancelled = false;
+
+    async function loadMenu() {
+      setMenuLoading(true);
+      setMenuError(null);
+
+      try {
+        const rows = await getMenu(hotel.id);
+
+        if (cancelled) return;
+
+        if (!Array.isArray(rows) || rows.length === 0) {
+          throw new Error("No menu items were returned for this restaurant.");
+        }
+
+        const mappedMenu: MenuItem[] = rows
+          .filter((m: any) => m?.id)
+          .map((m: any) => ({
+            // IMPORTANT: preserve the real backend menu-item ID.
+            // createOrder() sends this value as order_items.menu_item_id.
+            id: String(m.id),
+            name: String(m.name ?? "Unnamed dish"),
+            desc: String(m.desc ?? m.description ?? ""),
+            price: Number(m.price ?? 0),
+            badge: String(m.badge ?? ""),
+            img: getMenuImage(m),
+            category: String(m.category ?? "Mains"),
+          }));
+
+        if (mappedMenu.length === 0) {
+          throw new Error("The restaurant menu contains no valid menu-item IDs.");
+        }
+
+        setMenu(mappedMenu);
+        console.log("[TableTab] MENU LOADED FROM SUPABASE:", mappedMenu);
+      } catch (error) {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : "Unable to load the restaurant menu.";
+        setMenu([]);
+        setMenuError(message);
+        console.error("[TableTab] FAILED TO LOAD SUPABASE MENU:", error);
+      } finally {
+        if (!cancelled) setMenuLoading(false);
+      }
+    }
+
+    loadMenu();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hotel?.id]);
+
+  useEffect(() => {
+    if (!hotel?.id) return;
+
+    let cancelled = false;
+
+    async function startDiningSession() {
+      setSessionLoading(true);
+      setSessionError(null);
+
+      const token = new URLSearchParams(window.location.search).get("token")?.trim();
+      console.log("[TableTab] QR TOKEN:", token || "<missing>");
+
+      if (!token) {
+        const message = "This customer session has no QR token. Scan the table QR code generated by Admin.";
+        setSessionError(message);
+        setSessionLoading(false);
+        console.error("[TableTab] " + message);
+        return;
+      }
+
+      try {
+        const session = await createDiningSession(token, 1);
+
+        if (cancelled) return;
+
+        if (!session?.public_token) {
+          throw new Error("The backend did not return a public dining session token.");
+        }
+
+        console.log("[TableTab] DINING SESSION CREATED:", session);
+        setSessionToken(session.public_token);
+      } catch (error) {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : "Unable to start the dining session.";
+        setSessionError(message);
+        console.error("[TableTab] DINING SESSION FAILED:", error);
+      } finally {
+        if (!cancelled) setSessionLoading(false);
+      }
+    }
+
+    startDiningSession();
+
+    return () => {
+      cancelled = true;
+    };
   }, [hotel?.id]);
 
   useEffect(() => {
@@ -131,7 +254,16 @@ export default function App({ hotel, table }: AppProps) {
         const latest = orders[0];
         if (!latest || stopped) return;
         setBackendOrderId(latest.id);
-        const next = latest.status === "new" ? "placed" : latest.status === "preparing" ? "preparing" : latest.status === "ready" || latest.status === "served" ? "served" : latest.status === "cancelled" ? "cart" : "placed";
+        const next: OrderStatus =
+          latest.status === "new"
+            ? "placed"
+            : latest.status === "preparing"
+            ? "preparing"
+            : latest.status === "ready"
+            ? "ready"
+            : latest.status === "served"
+            ? "served"
+            : "cart";
         setOrderStatus(next);
       } catch (error) {
         if (!stopped) console.warn("Unable to sync order status", error);
@@ -142,14 +274,13 @@ export default function App({ hotel, table }: AppProps) {
     return () => { stopped = true; window.clearInterval(timer); };
   }, [sessionToken]);
 
-  const sessionStart = "7:02 PM";
-  const elapsed = "32 min";
-  const venueName = hotel?.name ?? "Saffron & Ember";
-  const venueCuisine = hotel?.cuisine ?? "Modern Indian dining";
-  const tableNumber = (table ?? (hotel?.id === "grandpalms" ? "08" : "12")).padStart(2, "0");
-  const orderNumber = hotel?.id === "grandpalms"
-    ? `GP-${2078 + Number(tableNumber)}`
-    : `TT-${1036 + Number(tableNumber)}`;
+  const sessionStart = "—";
+  const elapsed = "—";
+  const venueName = hotel?.name ?? "Restaurant";
+  const venueCuisine = hotel?.cuisine ?? "Restaurant dining";
+  const tableNumber = table ? table.padStart(2, "0") : "—";
+  const orderNumber = backendOrderId ? `#${backendOrderId.slice(0, 8)}` : "Not placed";
+  const categories = useMemo(() => ["All", ...Array.from(new Set(menu.map(item => item.category).filter(Boolean)))], [menu]);
 
   const filtered = useMemo(() => {
     return menu.filter(m => {
@@ -157,12 +288,12 @@ export default function App({ hotel, table }: AppProps) {
       const matchSearch = search === "" || m.name.toLowerCase().includes(search.toLowerCase()) || m.desc.toLowerCase().includes(search.toLowerCase());
       return matchCat && matchSearch;
     });
-  }, [category, search]);
+  }, [menu, category, search]);
 
   const allFiltered = useMemo(() => {
     if (search === "") return filtered;
     return menu.filter(m => m.name.toLowerCase().includes(search.toLowerCase()) || m.desc.toLowerCase().includes(search.toLowerCase()));
-  }, [search, filtered]);
+  }, [menu, search, filtered]);
 
   const displayItems = search !== "" ? allFiltered : filtered;
 
@@ -184,34 +315,106 @@ export default function App({ hotel, table }: AppProps) {
     setCart(prev => prev.filter(c => !(c.item.id === id && c.spiceLevel === level)));
   }
 
-  const totals = calcTotals(cart);
-  const totalItems = cart.reduce((s, c) => s + c.qty, 0);
+  const sessionItems = [...orderedItems, ...cart];
+  const totals = calcTotals(sessionItems);
+  const cartTotals = calcTotals(cart);
+  const totalItems = sessionItems.reduce((s, c) => s + c.qty, 0);
+  const pendingItems = cart.reduce((s, c) => s + c.qty, 0);
 
-  async function placeOrder() {
-    if (cart.length === 0) return;
-    if (sessionToken) {
-      try {
-        const order = await createOrder({ sessionToken, guests: 2, orderNote, items: cart.map(c => ({ menuItemId: c.item.id, quantity: c.qty, spiceLevel: c.spiceLevel, note: c.note })) });
-        setBackendOrderId(order.id);
-      } catch (error) {
-        console.error(error);
+  function mergeItems(existing: CartItem[], incoming: CartItem[]) {
+    const merged = [...existing];
+
+    for (const incomingItem of incoming) {
+      const existingIndex = merged.findIndex(
+        item =>
+          item.item.id === incomingItem.item.id &&
+          item.spiceLevel === incomingItem.spiceLevel &&
+          item.note === incomingItem.note
+      );
+
+      if (existingIndex >= 0) {
+        merged[existingIndex] = {
+          ...merged[existingIndex],
+          qty: merged[existingIndex].qty + incomingItem.qty,
+        };
+      } else {
+        merged.push(incomingItem);
       }
     }
-    setOrderStatus("placed");
-    setTimeout(() => setOrderStatus("preparing"), 800);
-    setTab("order");
+
+    return merged;
+  }
+
+  async function placeOrder() {
+    if (cart.length === 0 || orderSubmitting) return;
+
+    if (!sessionToken) {
+      const message = sessionError || "Your table session is not active. Please scan the table QR code again.";
+      console.error("[TableTab] Cannot place order:", message);
+      alert(message);
+      return;
+    }
+
+    if (menuError || menu.length === 0) {
+      const message = menuError || "The restaurant menu is not available yet.";
+      alert(message);
+      return;
+    }
+
+    setOrderSubmitting(true);
+
+    try {
+      console.log("[TableTab] PLACING ORDER WITH SESSION:", sessionToken);
+      console.log("[TableTab] ORDER ITEMS:", cart.map(c => ({
+        menuItemId: c.item.id,
+        quantity: c.qty,
+        spiceLevel: c.spiceLevel,
+        note: c.note,
+      })));
+
+      const order = await createOrder({
+        sessionToken,
+        guests: 1,
+        orderNote: orderNote.trim() || undefined,
+        items: cart.map(c => ({
+          menuItemId: c.item.id,
+          quantity: c.qty,
+          spiceLevel: c.spiceLevel,
+          note: c.note,
+        })),
+      });
+
+      console.log("[TableTab] ORDER CREATED SUCCESSFULLY:", order);
+
+      setBackendOrderId(order.id);
+      setOrderedItems(prev => mergeItems(prev, cart));
+      setCart([]);
+      setOrderNote("");
+      setShowNoteInput(false);
+      setOrderStatus(order.status === "preparing" ? "preparing" : "placed");
+      setTab("order");
+    } catch (error) {
+      console.error("[TableTab] ORDER CREATION FAILED:", error);
+      alert(error instanceof Error ? error.message : "Unable to place order. Please try again.");
+    } finally {
+      setOrderSubmitting(false);
+    }
   }
 
   async function requestBill() {
-    if (sessionToken) {
-      try { await createServiceRequest(sessionToken, "bill"); } catch (error) { console.error(error); }
+    if (!sessionToken) {
+      alert(sessionError || "Your table session is not active. Please scan the table QR code again.");
+      return;
     }
-    setBillStatus("requested");
-    setTab("bill");
-  }
 
-  function settleBill() {
-    setBillStatus("settled");
+    try {
+      await createServiceRequest(sessionToken, "bill");
+      setBillStatus("requested");
+      setTab("bill");
+    } catch (error) {
+      console.error("[TableTab] BILL REQUEST FAILED:", error);
+      alert(error instanceof Error ? error.message : "Unable to request the bill. Please try again.");
+    }
   }
 
   const sidebarOrderTotal = fmt(totals.total);
@@ -296,7 +499,7 @@ export default function App({ hotel, table }: AppProps) {
             </div>
             <div className="bg-white border border-[#ded9d0] border-solid flex gap-2 items-center p-[14px] rounded-[12px] w-full">
               <div className="relative shrink-0 size-[8px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgEllipse1} /></div>
-              <p className="font-['Inter:Regular'] font-normal text-[#32705a] text-[12px] whitespace-nowrap">Guest service online</p>
+              <p className={`font-['Inter:Regular'] font-normal text-[12px] whitespace-nowrap ${sessionError ? "text-[#b44b2a]" : "text-[#32705a]"}`}>{sessionError ? "Table session needs attention" : sessionToken ? "Guest service online" : "Connecting to table…"}</p>
             </div>
             <div className="bg-white border border-[#ded9d0] border-solid flex flex-col gap-3 items-start p-[18px] rounded-[18px] w-full">
               <p className="font-['Inter:Extra_Bold'] font-extrabold text-[#20231f] text-[14px]">Order summary</p>
@@ -359,9 +562,9 @@ export default function App({ hotel, table }: AppProps) {
                     <div className="bg-[#fbf8f3] border border-[#ded9d0] border-solid flex items-center justify-between p-[14px] rounded-[12px] w-full">
                       <div className="flex gap-[6px] items-center">
                         <div className="relative size-[8px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgEllipse1} /></div>
-                        <p className="font-['Inter:Regular'] font-normal text-[#32705a] text-[12px] whitespace-nowrap">Service is live</p>
+                        <p className="font-['Inter:Regular'] font-normal text-[#32705a] text-[12px] whitespace-nowrap">Menu and ordering</p>
                       </div>
-                      <p className="font-['Inter:Regular'] font-normal text-[#575b54] text-[12px] whitespace-nowrap">Kitchen until 10:30 PM</p>
+                      <p className="font-['Inter:Regular'] font-normal text-[#575b54] text-[12px] whitespace-nowrap">Hours set by restaurant</p>
                     </div>
                     <div className="flex flex-col gap-2 items-start w-full">
                       <p className="font-['DM_Sans:Regular'] font-normal text-[#20231f] text-[24px]" style={{ fontVariationSettings: '"opsz" 14' }}>Ready when you are</p>
@@ -392,6 +595,24 @@ export default function App({ hotel, table }: AppProps) {
                   </div>
                 </div>
 
+                {/* Backend connection status */}
+                {(sessionLoading || sessionError || menuLoading || menuError) && (
+                  <div className={`border border-solid flex flex-col gap-2 items-start p-4 rounded-[16px] w-full ${sessionError || menuError ? "bg-[#fff2ef] border-[#e4b8aa]" : "bg-[#fbf8f3] border-[#ded9d0]"}`}>
+                    {sessionLoading && (
+                      <p className="font-['Inter:Regular'] font-normal text-[#575b54] text-[12px]">Starting your table session…</p>
+                    )}
+                    {menuLoading && (
+                      <p className="font-['Inter:Regular'] font-normal text-[#575b54] text-[12px]">Loading the restaurant menu…</p>
+                    )}
+                    {sessionError && (
+                      <p className="font-['Inter:Regular'] font-normal text-[#b44b2a] text-[12px]">Table session: {sessionError}</p>
+                    )}
+                    {menuError && (
+                      <p className="font-['Inter:Regular'] font-normal text-[#b44b2a] text-[12px]">Menu: {menuError}</p>
+                    )}
+                  </div>
+                )}
+
                 {/* Menu section */}
                 <div className="bg-white border border-[#ded9d0] border-solid flex flex-col gap-[18px] items-start p-6 rounded-[24px] w-full">
                   <div className="flex items-end justify-between w-full">
@@ -399,7 +620,7 @@ export default function App({ hotel, table }: AppProps) {
                       <p className="font-['Inter:Bold'] font-bold text-[#b44b2a] text-[11px] uppercase tracking-[0.12em]">Tonight at {venueName}</p>
                       <p className="font-['DM_Sans:Regular'] font-normal text-[#20231f] text-[26px]" style={{ fontVariationSettings: '"opsz" 14' }}>Explore the menu</p>
                     </div>
-                    <p className="font-['Inter:Regular'] font-normal text-[#8a8d86] text-[13px]">{MENU.length} options</p>
+                    <p className="font-['Inter:Regular'] font-normal text-[#8a8d86] text-[13px]">{menu.length} options</p>
                   </div>
                   <div className="bg-white border border-[#ded9d0] border-solid flex gap-2 h-[44px] items-center px-[13px] rounded-[12px] w-full">
                     <div className="relative size-[17px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgSearch} /></div>
@@ -412,13 +633,17 @@ export default function App({ hotel, table }: AppProps) {
                     {search && <button onClick={() => setSearch("")} className="text-[#8a8d86] text-[12px] hover:text-[#20231f]">✕</button>}
                   </div>
                   <div className="flex gap-2 items-start overflow-x-auto w-full pb-1">
-                    {CATEGORIES.map(cat => (
+                    {(categories.length ? categories : DEFAULT_CATEGORIES).map(cat => (
                       <button key={cat} onClick={() => { setCategory(cat); setSearch(""); }} className={`flex flex-col items-start px-[13px] py-[8px] rounded-full shrink-0 border border-solid transition-colors ${category === cat && search === "" ? "bg-[#252824] border-[#252824]" : "bg-white border-[#ded9d0] hover:border-[#aaa]"}`}>
                         <p className={`font-['Inter:Bold'] font-bold text-[12px] whitespace-nowrap ${category === cat && search === "" ? "text-white" : "text-[#575b54]"}`}>{cat}</p>
                       </button>
                     ))}
                   </div>
-                  {displayItems.length === 0 ? (
+                  {menuLoading ? (
+                    <p className="font-['Inter:Regular'] font-normal text-[#8a8d86] text-[14px] py-4 w-full text-center">Loading dishes…</p>
+                  ) : menuError ? (
+                    <p className="font-['Inter:Regular'] font-normal text-[#b44b2a] text-[14px] py-4 w-full text-center">The menu could not be loaded. Please refresh or scan the table QR again.</p>
+                  ) : displayItems.length === 0 ? (
                     <p className="font-['Inter:Regular'] font-normal text-[#8a8d86] text-[14px] py-4 w-full text-center">No dishes found.</p>
                   ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6 w-full">
@@ -544,16 +769,16 @@ export default function App({ hotel, table }: AppProps) {
             {/* ── ORDER TAB ── */}
             {tab === "order" && (
               <>
-                {orderStatus === "cart" && (
+                {(orderStatus === "cart" || pendingItems > 0) && (
                   <div className="bg-white border border-[#ded9d0] border-solid flex flex-col gap-[18px] items-start p-6 rounded-[24px] w-full">
                     <div className="flex items-center justify-between w-full">
                       <p className="font-['DM_Sans:Regular'] font-normal text-[#20231f] text-[22px]" style={{ fontVariationSettings: '"opsz" 14' }}>Review your order</p>
-                      {cart.length > 0 && <button onClick={() => setCart([])} className="font-['Inter:Bold'] font-bold text-[#b44b2a] text-[13px] hover:opacity-70 transition-opacity">Clear</button>}
+                      {pendingItems > 0 && <button onClick={() => setCart([])} className="font-['Inter:Bold'] font-bold text-[#b44b2a] text-[13px] hover:opacity-70 transition-opacity">Clear</button>}
                     </div>
-                    {cart.length === 0 ? (
-                      <div className="flex flex-col items-center gap-3 py-10 w-full">
-                        <p className="font-['DM_Sans:Regular'] font-normal text-[#20231f] text-[18px]" style={{ fontVariationSettings: '"opsz" 14' }}>Your cart is empty</p>
-                        <p className="font-['Inter:Regular'] font-normal text-[#8a8d86] text-[13px]">Browse the menu to add items</p>
+                    {pendingItems === 0 ? (
+                      <div className="flex flex-col items-center gap-3 py-8 w-full">
+                        <p className="font-['DM_Sans:Regular'] font-normal text-[#20231f] text-[18px]" style={{ fontVariationSettings: '"opsz" 14' }}>No new items waiting to be sent</p>
+                        <p className="font-['Inter:Regular'] font-normal text-[#8a8d86] text-[13px]">Your submitted items remain below in order history.</p>
                         <button onClick={() => setTab("menu")} className="mt-2 bg-[#b44b2a] flex gap-2 h-[46px] items-center justify-center px-6 rounded-[12px] hover:opacity-90 transition-opacity">
                           <div className="relative size-[17px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgArrowRight} /></div>
                           <p className="font-['Inter:Regular'] font-normal text-[14px] text-white whitespace-nowrap">Browse menu</p>
@@ -589,6 +814,26 @@ export default function App({ hotel, table }: AppProps) {
                             </div>
                           ))}
                         </div>
+
+                        {orderedItems.length > 0 && (
+                          <div className="bg-[#fbf8f3] border border-[#ded9d0] border-solid flex flex-col gap-[10px] items-start p-4 rounded-[12px] w-full">
+                            <div className="flex items-center justify-between w-full">
+                              <p className="font-['Inter:Extra_Bold'] font-extrabold text-[#20231f] text-[14px]">Already sent to kitchen</p>
+                              <p className="font-['Inter:Regular'] font-normal text-[#575b54] text-[11px]">{orderedItems.reduce((sum, item) => sum + item.qty, 0)} items</p>
+                            </div>
+                            {orderedItems.map(c => (
+                              <div key={`ordered-${c.item.id}-${c.spiceLevel}-${c.note ?? ""}`} className="flex gap-2 items-start text-[12px] w-full">
+                                <p className="font-['Inter:Extra_Bold'] font-extrabold text-[#32705a] w-[24px]">{c.qty}×</p>
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-['Inter:Regular'] font-normal text-[#20231f]">{c.item.name}</p>
+                                  {c.spiceLevel && <p className="font-['Inter:Regular'] font-normal text-[#8a8d86] capitalize">{c.spiceLevel} spice</p>}
+                                </div>
+                                <p className="font-['Inter:Regular'] font-normal text-[#20231f] whitespace-nowrap">{fmt(c.item.price * c.qty)}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
                         {showNoteInput ? (
                           <div className="bg-white border border-[#ded9d0] border-solid flex flex-col gap-2 p-3 rounded-[8px] w-full">
                             <textarea
@@ -609,7 +854,7 @@ export default function App({ hotel, table }: AppProps) {
                           </button>
                         )}
                         <div className="flex flex-col gap-[9px] items-start w-full">
-                          {[["Subtotal", fmt(totals.subtotal)], ["Tax · 8.5%", fmt(totals.tax)], ["Service charge · 5%", fmt(totals.service)]].map(([label, value]) => (
+                          {[["Subtotal", fmt(cartTotals.subtotal)], ["Tax · 8.5%", fmt(cartTotals.tax)], ["Service charge · 5%", fmt(cartTotals.service)]].map(([label, value]) => (
                             <div key={label} className="flex font-['Inter:Regular'] font-normal items-start justify-between text-[13px] w-full">
                               <p className="text-[#575b54]">{label}</p>
                               <p className="text-[#20231f]">{value}</p>
@@ -618,20 +863,20 @@ export default function App({ hotel, table }: AppProps) {
                           <div className="h-px bg-[#ded9d0] w-full" />
                           <div className="flex items-start justify-between font-['DM_Sans:ExtraBold'] font-extrabold text-[#20231f] text-[18px] w-full">
                             <p style={{ fontVariationSettings: '"opsz" 14' }}>Total</p>
-                            <p style={{ fontVariationSettings: '"opsz" 14' }}>{fmt(totals.total)}</p>
+                            <p style={{ fontVariationSettings: '"opsz" 14' }}>{fmt(cartTotals.total)}</p>
                           </div>
                         </div>
-                        <p className="font-['Inter:Regular'] font-normal leading-[1.4] text-[#8a8d86] text-[10px] text-center w-full">By placing this order, it will be sent directly to the kitchen.</p>
-                        <button onClick={placeOrder} className="bg-[#b44b2a] border border-[#b44b2a] border-solid flex gap-2 h-[46px] items-center justify-center px-4 rounded-[12px] w-full hover:opacity-90 transition-opacity">
+                        <p className="font-['Inter:Regular'] font-normal leading-[1.4] text-[#8a8d86] text-[10px] text-center w-full">Only the new items above will be sent to the kitchen.</p>
+                        <button onClick={placeOrder} disabled={orderSubmitting || !sessionToken || !!menuError || pendingItems === 0} className="bg-[#b44b2a] border border-[#b44b2a] border-solid flex gap-2 h-[46px] items-center justify-center px-4 rounded-[12px] w-full hover:opacity-90 transition-opacity disabled:cursor-not-allowed disabled:opacity-50">
                           <div className="relative size-[17px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgSend} /></div>
-                          <p className="font-['Inter:Regular'] font-normal text-[14px] text-white whitespace-nowrap">Place order · {fmt(totals.total)}</p>
+                          <p className="font-['Inter:Regular'] font-normal text-[14px] text-white whitespace-nowrap">{orderSubmitting ? "Sending…" : `Place order · ${fmt(cartTotals.total)}`}</p>
                         </button>
                       </>
                     )}
                   </div>
                 )}
 
-                {(orderStatus === "placed" || orderStatus === "preparing" || orderStatus === "served") && (
+                {(orderedItems.length > 0 || orderStatus === "placed" || orderStatus === "preparing" || orderStatus === "ready" || orderStatus === "served") && (
                   <>
                     {/* Tracking section */}
                     <div className="bg-white border border-[#ded9d0] border-solid flex flex-col gap-[18px] items-start p-6 rounded-[24px] w-full">
@@ -639,43 +884,29 @@ export default function App({ hotel, table }: AppProps) {
                         <p className="font-['DM_Sans:Regular'] font-normal text-[#20231f] text-[22px]" style={{ fontVariationSettings: '"opsz" 14' }}>Order {orderNumber}</p>
                         <div className="flex gap-[6px] items-center">
                           <div className="relative size-[8px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgEllipse1} /></div>
-                          <p className="font-['Inter:Regular'] font-normal text-[#32705a] text-[12px] whitespace-nowrap">Live · updated 7:18 PM</p>
+                          <p className="font-['Inter:Regular'] font-normal text-[#32705a] text-[12px] whitespace-nowrap">Status synced from kitchen</p>
                         </div>
                       </div>
                       <div className="bg-[#252824] flex flex-col gap-[10px] items-start p-[18px] rounded-[18px] w-full">
                         <p className="font-['DM_Sans:ExtraBold'] font-extrabold text-[26px] text-white w-full" style={{ fontVariationSettings: '"opsz" 14' }}>
-                          {orderStatus === "placed" ? "Order received!" : "The kitchen is preparing your order"}
+                          {orderStatus === "placed" ? "Order received!" : orderStatus === "preparing" ? "The kitchen is preparing your order" : orderStatus === "ready" ? "Your order is ready" : orderStatus === "served" ? "Your order has been served" : "Order status"}
                         </p>
                         <p className="font-['Inter:Regular'] font-normal text-[13px] text-[rgba(255,255,255,0.72)] w-full">
-                          {orderStatus === "placed" ? "Sending to kitchen..." : "Estimated ready in 12-16 minutes"}
+                          {orderStatus === "placed" ? "Your order has been received by TableTab." : "Order progress updates when the kitchen changes the status."}
                         </p>
                       </div>
-                      <div className="flex flex-col items-start w-full">
-                        {[
-                          { dot: imgEllipse6, label: "Confirmed", time: "7:14 PM", active: true, lineColor: "#32705a" },
-                          { dot: imgEllipse6, label: "Preparing", time: "7:18 PM", active: orderStatus === "preparing" || orderStatus === "served", lineColor: "#ded9d0" },
-                          { dot: imgEllipse7, label: "Ready", time: "About 7:34 PM", active: false, lineColor: "#ded9d0" },
-                          { dot: imgEllipse7, label: "Served", time: "-", active: false, lineColor: null },
-                        ].map((step) => (
-                          <div key={step.label} className="flex gap-3 h-16 items-start w-full">
-                            <div className="flex flex-col h-full items-center w-[22px]">
-                              <div className="relative size-[18px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={step.dot} /></div>
-                              {step.lineColor && <div className="flex-1 min-h-px w-[2px]" style={{ backgroundColor: step.lineColor }} />}
-                            </div>
-                            <div className="flex flex-1 items-start justify-between min-w-0">
-                              <p className={`${step.active ? "font-['Inter:Regular'] font-normal text-[#20231f]" : "font-['Inter:Semi_Bold'] font-semibold text-[#8a8d86]"} text-[14px]`}>{step.label}</p>
-                              <p className={`${step.active ? "font-['Inter:Regular'] font-normal text-[#575b54]" : "font-['Inter:Regular'] font-normal text-[#8a8d86]"} text-[12px] whitespace-nowrap`}>{step.time}</p>
-                            </div>
-                          </div>
-                        ))}
+                      <div className="rounded-xl border border-[#ded9d0] bg-[#fbf8f3] p-4 w-full">
+                        <p className="text-xs uppercase tracking-wide text-[#8a8d86]">Current database status</p>
+                        <p className="mt-1 font-semibold capitalize text-[#20231f]">{orderStatus === "placed" ? "New" : orderStatus}</p>
+                        <p className="mt-1 text-xs text-[#777b73]">This status updates from the restaurant order record. No estimated timestamps are shown until the backend stores them.</p>
                       </div>
                       <div className="bg-white border border-[#ded9d0] border-solid flex flex-col gap-[11px] items-start p-4 rounded-[12px] w-full">
                         <div className="flex items-start justify-between w-full">
                           <p className="font-['Inter:Extra_Bold'] font-extrabold text-[#20231f] text-[14px]">Your order</p>
                           <p className="font-['Inter:Regular'] font-normal text-[#575b54] text-[11px]">{totalItems} items</p>
                         </div>
-                        {cart.map(c => (
-                          <div key={`${c.item.id}-${c.spiceLevel}`} className="flex gap-2 items-start text-[12px] w-full">
+                        {sessionItems.map(c => (
+                          <div key={`tracking-${c.item.id}-${c.spiceLevel}-${c.note ?? ""}`} className="flex gap-2 items-start text-[12px] w-full">
                             <p className="font-['Inter:Extra_Bold'] font-extrabold text-[#b44b2a] w-[18px]">{c.qty}×</p>
                             <p className="flex-1 font-['Inter:Regular'] font-normal text-[#20231f] min-w-0">{c.item.name}</p>
                           </div>
@@ -705,8 +936,8 @@ export default function App({ hotel, table }: AppProps) {
                       <div className="bg-white border border-[#ded9d0] border-solid flex flex-col gap-3 items-start p-[18px] rounded-[18px] w-full">
                         <div className="flex items-center justify-between w-full">
                           <div className="flex flex-col gap-1 items-start">
-                            <p className="font-['DM_Sans:ExtraBold'] font-extrabold text-[#20231f] text-[21px]" style={{ fontVariationSettings: '"opsz" 14' }}>Dinner in progress</p>
-                            <p className="font-['Inter:Regular'] font-normal text-[#575b54] text-[12px]">Opened {sessionStart} · 2 guests</p>
+                            <p className="font-['DM_Sans:ExtraBold'] font-extrabold text-[#20231f] text-[21px]" style={{ fontVariationSettings: '"opsz" 14' }}>Dining session</p>
+                            <p className="font-['Inter:Regular'] font-normal text-[#575b54] text-[12px]">Opened {sessionStart} · 1 guest</p>
                           </div>
                           <div className="bg-[#e2f0ea] flex gap-[6px] items-center px-[10px] py-[6px] rounded-full">
                             <div className="relative size-[6px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgEllipse2} /></div>
@@ -727,7 +958,7 @@ export default function App({ hotel, table }: AppProps) {
                         <div className="flex items-center justify-between w-full">
                           <div className="flex gap-[6px] items-center px-[10px] py-[6px]">
                             <div className="relative size-[6px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgEllipse8} /></div>
-                            <p className="font-['Inter:Bold'] font-bold text-[#b06a16] text-[12px] whitespace-nowrap">Preparing · 8 min</p>
+                            <p className="font-['Inter:Bold'] font-bold text-[#b06a16] text-[12px] whitespace-nowrap">{orderStatus === "served" ? "Served" : orderStatus === "preparing" ? "Preparing" : "Order received"}</p>
                           </div>
                           <div className="flex gap-[6px] items-center">
                             <div className="relative size-[8px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgEllipse1} /></div>
@@ -735,7 +966,7 @@ export default function App({ hotel, table }: AppProps) {
                           </div>
                         </div>
                         <div className="font-['Inter:Regular'] font-normal text-[#20231f] text-[13px] w-full">
-                          {cart.map(c => <p key={`${c.item.id}-${c.spiceLevel}`} className="leading-[1.55]">{c.qty}× {c.item.name}</p>)}
+                          {sessionItems.map(c => <p key={`activity-${c.item.id}-${c.spiceLevel}-${c.note ?? ""}`} className="leading-[1.55]">{c.qty}× {c.item.name}</p>)}
                         </div>
                       </div>
                       <div className="bg-[#252824] flex flex-col gap-[10px] items-start p-[18px] rounded-[18px] w-full">
@@ -759,7 +990,6 @@ export default function App({ hotel, table }: AppProps) {
                   <p className="font-['DM_Sans:Regular'] font-normal text-[#20231f] text-[22px]" style={{ fontVariationSettings: '"opsz" 14' }}>Your bill</p>
                   {billStatus === "none" && <p className="font-['Inter:Bold'] font-bold text-[#575b54] text-[11px]">UNPAID</p>}
                   {billStatus === "requested" && <p className="font-['Inter:Bold'] font-bold text-[#b06a16] text-[11px]">BILL REQUESTED</p>}
-                  {billStatus === "settled" && <p className="font-['Inter:Bold'] font-bold text-[#8ed3b7] text-[11px]">SETTLED</p>}
                 </div>
 
                 {billStatus === "requested" && (
@@ -768,29 +998,21 @@ export default function App({ hotel, table }: AppProps) {
                       <div className="relative size-[22px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgClock} /></div>
                     </div>
                     <p className="font-['DM_Sans:ExtraBold'] font-extrabold text-[#20231f] text-[21px] whitespace-nowrap" style={{ fontVariationSettings: '"opsz" 14' }}>Your bill is requested</p>
-                    <p className="font-['Inter:Regular'] font-normal leading-[1.45] text-[#575b54] text-[12px] text-center w-full">A team member was notified at 7:42 PM and will be with you shortly.</p>
+                    <p className="font-['Inter:Regular'] font-normal leading-[1.45] text-[#575b54] text-[12px] text-center w-full">Your bill request has been recorded. A team member will assist you shortly.</p>
                   </div>
                 )}
 
-                {billStatus === "settled" && (
-                  <div className="bg-[#e2f0ea] flex flex-col gap-2 items-center p-[18px] rounded-[18px] w-full">
-                    <div className="bg-[#32705a] flex flex-col items-center justify-center rounded-full size-[44px]">
-                      <div className="relative size-[22px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgCheck} /></div>
-                    </div>
-                    <p className="font-['DM_Sans:ExtraBold'] font-extrabold text-[#20231f] text-[21px] whitespace-nowrap" style={{ fontVariationSettings: '"opsz" 14' }}>Paid - thank you</p>
-                    <p className="font-['Inter:Regular'] font-normal leading-[1.45] text-[#575b54] text-[12px] text-center w-full">Visa •••• 1842 · Settled at 7:46 PM</p>
-                  </div>
-                )}
+
 
                 <div className="bg-white border border-[#ded9d0] border-solid flex flex-col gap-[11px] items-start p-4 rounded-[12px] w-full">
                   <div className="flex items-start justify-between w-full">
                     <p className="font-['Inter:Extra_Bold'] font-extrabold text-[#20231f] text-[14px]">Table {tableNumber} · {orderNumber}</p>
-                    <p className="font-['Inter:Regular'] font-normal text-[#575b54] text-[11px]">2 guests</p>
+                    <p className="font-['Inter:Regular'] font-normal text-[#575b54] text-[11px]">1 guest</p>
                   </div>
-                  {cart.length === 0 ? (
+                  {sessionItems.length === 0 ? (
                     <p className="font-['Inter:Regular'] font-normal text-[#8a8d86] text-[13px]">No items ordered yet.</p>
                   ) : (
-                    cart.map(c => (
+                    sessionItems.map(c => (
                       <div key={`${c.item.id}-${c.spiceLevel}`} className="flex font-['Inter:Regular'] font-normal gap-2 items-start text-[12px] w-full">
                         <p className="text-[#575b54] w-[20px]">{c.qty}×</p>
                         <p className="flex-1 text-[#20231f] min-w-0">{c.item.name}</p>
@@ -821,18 +1043,9 @@ export default function App({ hotel, table }: AppProps) {
                   </>
                 )}
 
-                {billStatus === "requested" && (
-                  <button onClick={settleBill} className="bg-[#fbf8f3] border border-[#ded9d0] border-solid flex gap-2 h-[46px] items-center justify-center px-4 rounded-[12px] w-full hover:bg-white transition-colors">
-                    <p className="font-['Inter:Regular'] font-normal text-[#20231f] text-[14px] whitespace-nowrap">Mark as paid (demo)</p>
-                  </button>
-                )}
 
-                {billStatus === "settled" && (
-                  <button className="bg-[#fbf8f3] border border-[#ded9d0] border-solid flex gap-2 h-[46px] items-center justify-center px-4 rounded-[12px] w-full hover:bg-white transition-colors">
-                    <div className="relative size-[17px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgMail} /></div>
-                    <p className="font-['Inter:Regular'] font-normal text-[#20231f] text-[14px] whitespace-nowrap">Email receipt</p>
-                  </button>
-                )}
+
+
               </div>
             )}
           </div>

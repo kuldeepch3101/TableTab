@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { getOrders, updateOrder } from "./lib/tabletabApi";
 
 const assetPathPrefix = "/assets";
@@ -34,6 +34,8 @@ interface TicketItem {
 interface Ticket {
   id: string;
   table: string;
+  guests: number;
+  orderNumber: string;
   time: string;
   elapsed: number; // seconds
   items: TicketItem[];
@@ -48,7 +50,9 @@ function mapOrderToTicket(order: any): Ticket {
   const lane: Lane = order.status === "new" ? "new" : order.status === "preparing" ? "preparing" : order.status === "ready" ? "ready" : "completed";
   return {
     id: order.id,
-    table: order.tableNumber ? `Table ${String(order.tableNumber).padStart(2, "0")}` : "Table —",
+    table: order.tableName || (order.tableNumber ? `Table ${String(order.tableNumber).padStart(2, "0")}` : "Table —"),
+    guests: Number(order.guests ?? 0),
+    orderNumber: order.orderNumber || `Order ${String(order.id).slice(0, 8)}`,
     time: new Date(order.createdAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
     elapsed,
     items: order.items.map((item: any) => ({
@@ -93,33 +97,65 @@ function TicketNote({ note }: { note: NonNullable<Ticket["note"]> }) {
 export default function KitchenApp({ propertyId }: { propertyId?: string }) {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [completedHistory, setCompletedHistory] = useState<Array<{ id: string; loc: string; time: string }>>([]);
+  const [completedToday, setCompletedToday] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [clock, setClock] = useState(new Date());
   const [muted, setMuted] = useState(false);
-  const [station, setStation] = useState("All stations");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
 
-  async function loadOrders() {
-    if (!propertyId) return;
+  const loadOrders = useCallback(async () => {
+    if (!propertyId) {
+      setTickets([]);
+      setCompletedHistory([]);
+      setCompletedToday(0);
+      setLoadError("Kitchen is not connected to a restaurant property.");
+      setLoading(false);
+      console.error("[TableTab][Kitchen] Missing propertyId");
+      return;
+    }
+
     try {
+      console.log("[TableTab][Kitchen] Loading orders for property:", propertyId);
       const orders = await getOrders(propertyId);
+      console.log("[TableTab][Kitchen] Orders received:", orders.length, orders);
+
       const mapped = orders.map(mapOrderToTicket);
       setTickets(mapped.filter(t => t.lane !== "completed"));
-      setCompletedHistory(mapped.filter(t => t.lane === "completed").slice(0, 8).map(t => ({ id: t.id, loc: t.table, time: `Served · ${t.time}` })));
-      setSelectedId(current => current && mapped.some(t => t.id === current && t.lane !== "completed") ? current : (mapped.find(t => t.lane === "preparing")?.id ?? mapped.find(t => t.lane === "new")?.id ?? null));
+      const todayKey = new Date().toDateString();
+      setCompletedToday(orders.filter((order: any) => ["served", "completed"].includes(order.status) && new Date(order.createdAt).toDateString() === todayKey).length);
+      setCompletedHistory(
+        mapped
+          .filter(t => t.lane === "completed")
+          .slice(0, 8)
+          .map(t => ({ id: t.id, loc: t.table, time: `Served · order placed ${t.time}` }))
+      );
+      setSelectedId(current =>
+        current && mapped.some(t => t.id === current && t.lane !== "completed")
+          ? current
+          : (mapped.find(t => t.lane === "preparing")?.id ??
+            mapped.find(t => t.lane === "new")?.id ??
+            null)
+      );
+      setLoadError(null);
+      setLastSyncedAt(new Date());
     } catch (error) {
-      console.warn("Unable to sync kitchen orders", error);
+      const message = error instanceof Error ? error.message : "Unable to load kitchen orders";
+      console.error("[TableTab][Kitchen] Unable to sync orders:", error);
+      setLoadError(message);
     } finally {
       setLoading(false);
     }
-  }
+  }, [propertyId]);
 
   useEffect(() => {
+    setLoading(true);
     loadOrders();
     const syncTimer = window.setInterval(loadOrders, 2500);
     const clockTimer = window.setInterval(() => setClock(new Date()), 1000);
     return () => { window.clearInterval(syncTimer); window.clearInterval(clockTimer); };
-  }, [propertyId]);
+  }, [loadOrders]);
 
   const clockStr = clock.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
 
@@ -132,7 +168,9 @@ export default function KitchenApp({ propertyId }: { propertyId?: string }) {
       if (nextStatus === "served") setSelectedId(null);
       await loadOrders();
     } catch (error) {
-      console.error("Unable to update kitchen order", error);
+      const message = error instanceof Error ? error.message : "Unable to update kitchen order";
+      console.error("[TableTab][Kitchen] Unable to update order:", error);
+      setLoadError(message);
     }
   }
 
@@ -141,7 +179,6 @@ export default function KitchenApp({ propertyId }: { propertyId?: string }) {
   const selectedTicket = tickets.find(t => t.id === selectedId) ?? null;
 
   const lateCount = tickets.filter(t => t.elapsed > 900 && t.lane !== "completed").length;
-  const completedToday = completedHistory.length;
 
   return (
     <div className="min-h-screen w-full bg-[#f3f0ea]">
@@ -159,11 +196,10 @@ export default function KitchenApp({ propertyId }: { propertyId?: string }) {
             </div>
           </div>
           <div className="flex gap-[10px] items-center">
-            <button onClick={() => setStation(s => s === "All stations" ? "Hot line" : "All stations")} className="bg-[#30342f] border border-[rgba(255,255,255,0.12)] border-solid flex gap-2 h-[40px] items-center px-[13px] rounded-[8px]">
+            <div className="bg-[#30342f] border border-[rgba(255,255,255,0.12)] flex gap-2 h-[40px] items-center px-[13px] rounded-[8px]" aria-label="Showing all restaurant orders">
               <div className="relative size-[16px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgSlidersHorizontal} /></div>
-              <p className="font-['Inter:Bold'] font-bold text-[13px] text-white whitespace-nowrap">{station}</p>
-              <div className="relative size-[15px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgChevronDown} /></div>
-            </button>
+              <p className="font-['Inter:Bold'] font-bold text-[13px] text-white whitespace-nowrap">All orders</p>
+            </div>
             <button onClick={() => setMuted(m => !m)} className={`flex items-center justify-center rounded-[8px] size-[40px] transition-colors ${muted ? "bg-[#b44b2a]" : "bg-[#30342f]"}`}>
               <div className="relative size-[18px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgVolume2} /></div>
             </button>
@@ -202,11 +238,35 @@ export default function KitchenApp({ propertyId }: { propertyId?: string }) {
                 <p className="font-['Inter:Bold'] font-bold text-[#b23a3a] text-[12px] whitespace-nowrap">{lateCount} late order{lateCount > 1 ? "s" : ""}</p>
               </div>
             )}
-            <p className="font-['Inter:Bold'] font-bold text-[12px] text-white whitespace-nowrap">Completed {completedToday} →</p>
+            <p className="font-['Inter:Bold'] font-bold text-[12px] text-white whitespace-nowrap">Served orders placed today: {completedToday} →</p>
           </div>
         </div>
 
         {/* Board */}
+        {loadError && (
+          <div className="mx-[18px] mt-[14px] bg-[#f8e1e1] border border-[#e3b7b7] rounded-[12px] px-4 py-3 flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p className="font-['Inter:Extra_Bold'] font-extrabold text-[#b23a3a] text-[12px] uppercase">Kitchen connection error</p>
+              <p className="font-['Inter:Regular'] font-normal text-[#20231f] text-[13px] mt-1 break-words">{loadError}</p>
+              <p className="font-['Inter:Regular'] font-normal text-[#8a8d86] text-[10px] mt-1 break-all">Property: {propertyId ?? "missing"}</p>
+            </div>
+            <button onClick={loadOrders} className="shrink-0 bg-[#b44b2a] text-white font-['Inter:Bold'] font-bold text-[12px] px-4 py-2 rounded-[8px]">Retry</button>
+          </div>
+        )}
+        {loading && !loadError && (
+          <div className="mx-[18px] mt-[14px] bg-white border border-[#ded9d0] rounded-[12px] px-4 py-3">
+            <p className="font-['Inter:Regular'] text-[#575b54] text-[13px]">Loading kitchen orders…</p>
+          </div>
+        )}
+        {!loading && !loadError && tickets.length === 0 && completedHistory.length === 0 && (
+          <div className="mx-[18px] mt-[14px] bg-white border border-[#ded9d0] rounded-[12px] px-4 py-3 flex items-center justify-between gap-4">
+            <div>
+              <p className="font-['Inter:Bold'] font-bold text-[#20231f] text-[13px]">No orders yet</p>
+              <p className="font-['Inter:Regular'] text-[#8a8d86] text-[11px] mt-1">New customer orders will appear here automatically.</p>
+            </div>
+            <p className="font-['Inter:Regular'] text-[#8a8d86] text-[10px] whitespace-nowrap">{lastSyncedAt ? `Synced ${lastSyncedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}` : "Waiting for sync"}</p>
+          </div>
+        )}
         <div className="flex flex-1 gap-4 items-start p-[18px] w-full overflow-x-auto">
           {/* New lane */}
           <div className="bg-[#f0ece5] flex flex-1 flex-col gap-3 items-start min-w-[240px] p-[14px] rounded-[18px] self-stretch">
@@ -225,7 +285,7 @@ export default function KitchenApp({ propertyId }: { propertyId?: string }) {
                 <div key={tk.id} className="bg-white border border-[#ded9d0] border-solid flex flex-col gap-[10px] items-start p-[15px] rounded-[12px] shadow-[0px_8px_24px_0px_rgba(43,38,31,0.08)] w-full cursor-pointer hover:border-[#b44b2a] transition-colors" onClick={() => setSelectedId(tk.id)}>
                   <div className="flex items-start justify-between w-full">
                     <div className="flex flex-col gap-[3px] items-start">
-                      <p className="font-['DM_Sans:Regular'] font-normal text-[#20231f] text-[17px]" style={{ fontVariationSettings: '"opsz" 14' }}>{tk.id}</p>
+                      <p className="font-['DM_Sans:Regular'] font-normal text-[#20231f] text-[17px]" style={{ fontVariationSettings: '"opsz" 14' }}>{tk.orderNumber}</p>
                       <p className="font-['Inter:Bold'] font-bold text-[#575b54] text-[12px]">{tk.table} · {tk.time}</p>
                     </div>
                     <ElapsedDisplay seconds={tk.elapsed} late={tk.late} />
@@ -270,7 +330,7 @@ export default function KitchenApp({ propertyId }: { propertyId?: string }) {
                   onClick={() => setSelectedId(tk.id)}>
                   <div className="flex items-start justify-between w-full">
                     <div className="flex flex-col gap-[3px] items-start">
-                      <p className="font-['DM_Sans:Regular'] font-normal text-[#20231f] text-[17px]" style={{ fontVariationSettings: '"opsz" 14' }}>{tk.id}</p>
+                      <p className="font-['DM_Sans:Regular'] font-normal text-[#20231f] text-[17px]" style={{ fontVariationSettings: '"opsz" 14' }}>{tk.orderNumber}</p>
                       <p className="font-['Inter:Bold'] font-bold text-[#575b54] text-[12px]">{tk.table} · {tk.time}</p>
                     </div>
                     <ElapsedDisplay seconds={tk.elapsed} late={tk.late} />
@@ -313,7 +373,7 @@ export default function KitchenApp({ propertyId }: { propertyId?: string }) {
                 <div key={tk.id} className="bg-white border border-[#32705a] border-solid flex flex-col gap-[10px] items-start p-[15px] rounded-[12px] shadow-[0px_8px_24px_0px_rgba(43,38,31,0.08)] w-full cursor-pointer hover:border-[#b44b2a] transition-colors" onClick={() => setSelectedId(tk.id)}>
                   <div className="flex items-start justify-between w-full">
                     <div className="flex flex-col gap-[3px] items-start">
-                      <p className="font-['DM_Sans:Regular'] font-normal text-[#20231f] text-[17px]" style={{ fontVariationSettings: '"opsz" 14' }}>{tk.id}</p>
+                      <p className="font-['DM_Sans:Regular'] font-normal text-[#20231f] text-[17px]" style={{ fontVariationSettings: '"opsz" 14' }}>{tk.orderNumber}</p>
                       <p className="font-['Inter:Bold'] font-bold text-[#575b54] text-[12px]">{tk.table} · {tk.time}</p>
                     </div>
                     <div className="flex flex-col gap-[2px] items-end">
@@ -346,7 +406,7 @@ export default function KitchenApp({ propertyId }: { propertyId?: string }) {
           <div className="bg-[#252824] flex flex-col gap-3 items-start p-[14px] rounded-[18px] shrink-0 w-[200px] self-stretch">
             <div className="flex items-start justify-between w-full">
               <p className="font-['DM_Sans:ExtraBold'] font-extrabold text-[16px] text-white" style={{ fontVariationSettings: '"opsz" 14' }}>Completed</p>
-              <p className="font-['Inter:Regular'] font-normal text-[11px] text-[rgba(255,255,255,0.56)]">{completedToday} today</p>
+              <p className="font-['Inter:Regular'] font-normal text-[11px] text-[rgba(255,255,255,0.56)]">{completedToday} orders placed today</p>
             </div>
             {completedHistory.slice(0, 5).map((c, i) => (
               <div key={c.id} className={`flex flex-col gap-1 items-start py-[10px] w-full ${i > 0 ? "border-t border-[rgba(255,255,255,0.1)] border-solid" : ""}`}>
@@ -374,7 +434,7 @@ export default function KitchenApp({ propertyId }: { propertyId?: string }) {
               {preparingTickets.map(tk => (
                 <button key={tk.id} onClick={() => setSelectedId(tk.id)} className={`flex flex-col gap-2 items-start p-[14px] rounded-[12px] w-full text-left transition-all ${selectedId === tk.id ? "bg-white border-2 border-[#b44b2a] border-solid" : "bg-[rgba(255,255,255,0.54)] border border-[#ded9d0] border-solid hover:border-[#aaa]"}`}>
                   <div className="flex items-start justify-between w-full">
-                    <p className="font-['DM_Sans:Regular'] font-normal text-[#20231f] text-[17px]" style={{ fontVariationSettings: '"opsz" 14' }}>{tk.id}</p>
+                    <p className="font-['DM_Sans:Regular'] font-normal text-[#20231f] text-[17px]" style={{ fontVariationSettings: '"opsz" 14' }}>{tk.orderNumber}</p>
                     <p className={`font-['DM_Sans:Regular'] font-normal text-[16px] ${tk.late || tk.elapsed > 900 ? "text-[#b23a3a]" : "text-[#20231f]"}`} style={{ fontVariationSettings: '"opsz" 14' }}>{fmtElapsed(tk.elapsed)}</p>
                   </div>
                   <p className="font-['Inter:Bold'] font-bold text-[#575b54] text-[12px]">{tk.table} · {tk.items.filter(i => !i.modifierStyle).length} lines</p>
@@ -388,17 +448,17 @@ export default function KitchenApp({ propertyId }: { propertyId?: string }) {
               <div className="flex items-start justify-between w-full">
                 <div className="flex flex-col gap-[6px] items-start">
                   <div className="flex gap-[10px] items-center">
-                    <p className="font-['DM_Sans:Regular'] font-normal text-[#20231f] text-[30px]" style={{ fontVariationSettings: '"opsz" 14' }}>{selectedTicket.id}</p>
+                    <p className="font-['DM_Sans:Regular'] font-normal text-[#20231f] text-[30px]" style={{ fontVariationSettings: '"opsz" 14' }}>{selectedTicket.orderNumber}</p>
                     <div className="bg-[#f9eacf] flex gap-[6px] items-center px-[10px] py-[6px] rounded-full">
                       <div className="relative size-[6px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgIndicator2} /></div>
-                      <p className="font-['Inter:Bold'] font-bold text-[#b06a16] text-[12px] whitespace-nowrap">Preparing</p>
+                      <p className="font-['Inter:Bold'] font-bold text-[#b06a16] text-[12px] whitespace-nowrap capitalize">{selectedTicket.lane}</p>
                     </div>
                   </div>
-                  <p className="font-['Inter:Bold'] font-bold text-[#575b54] text-[15px] whitespace-nowrap">{selectedTicket.table} · 2 guests · ordered {selectedTicket.time}</p>
+                  <p className="font-['Inter:Bold'] font-bold text-[#575b54] text-[15px] whitespace-nowrap">{selectedTicket.table} · {selectedTicket.guests || 0} guests · ordered {selectedTicket.time}</p>
                 </div>
                 <div className="flex flex-col gap-[3px] items-end">
                   <p className={`font-['DM_Sans:Regular'] font-normal text-[34px] ${selectedTicket.elapsed > 900 ? "text-[#b23a3a]" : "text-[#b06a16]"}`} style={{ fontVariationSettings: '"opsz" 14' }}>{fmtElapsed(selectedTicket.elapsed)}</p>
-                  <p className="font-['Inter:Bold'] font-bold text-[#8a8d86] text-[11px]">TARGET 16:00</p>
+                  <p className="font-['Inter:Bold'] font-bold text-[#8a8d86] text-[11px]">elapsed</p>
                 </div>
               </div>
 
@@ -407,24 +467,19 @@ export default function KitchenApp({ propertyId }: { propertyId?: string }) {
                 <div className="flex flex-1 flex-col gap-3 items-start min-w-[280px]">
                   <p className="font-['Inter:Extra_Bold'] font-extrabold text-[#8a8d86] text-[12px] uppercase">Items to prepare</p>
                   <div className="flex flex-col gap-3 items-start w-full">
-                    {selectedTicket.items.filter(it => !it.modifierStyle).map((it, i) => {
-                      const isAllergyLine = selectedTicket.items.find(x => x.modifierStyle === "red");
-                      const isThisLineAllergy = i === 1 && isAllergyLine;
+                    {selectedTicket.items.map((it, i) => {
+                      const quantity = it.text.match(/^\d+/)?.[0] ?? "1";
+                      const itemName = it.text.replace(/^\d+×\s*/, "");
                       return (
-                        <div key={i} className={`flex gap-4 items-start p-[18px] rounded-[12px] w-full ${isThisLineAllergy ? "bg-white border-2 border-[#b23a3a] border-solid" : "bg-white border border-[#ded9d0] border-solid"}`}>
+                        <div key={`${selectedTicket.id}-${i}`} className="flex gap-4 items-start p-[18px] rounded-[12px] w-full bg-white border border-[#ded9d0] border-solid">
                           <div className="bg-[#252824] flex items-center justify-center rounded-[8px] size-[44px] shrink-0">
-                            <p className="font-['DM_Sans:Regular'] font-normal text-[20px] text-white whitespace-nowrap" style={{ fontVariationSettings: '"opsz" 14' }}>1×</p>
+                            <p className="font-['DM_Sans:Regular'] font-normal text-[20px] text-white whitespace-nowrap">{quantity}×</p>
                           </div>
                           <div className="flex flex-1 flex-col gap-[6px] items-start min-w-0">
-                            <p className="font-['DM_Sans:ExtraBold'] font-extrabold text-[#20231f] text-[20px]" style={{ fontVariationSettings: '"opsz" 14' }}>{it.text.replace(/^\d+×\s*/, "")}</p>
-                            <p className={`font-['Inter:Bold'] font-bold text-[14px] ${isThisLineAllergy ? "text-[#b23a3a] font-['Inter:Extra_Bold'] font-extrabold" : "text-[#575b54]"}`}>
-                              {isThisLineAllergy ? "NO CHEESE · clean finishing pan" : "Classic pecorino · standard preparation"}
-                            </p>
+                            <p className="font-['DM_Sans:ExtraBold'] font-extrabold text-[#20231f] text-[20px]">{itemName}</p>
+                            <p className="font-['Inter:Regular'] text-[13px] text-[#575b54]">{it.modifier || "No preparation note provided"}</p>
                           </div>
-                          <div className={`flex gap-[6px] items-center px-[10px] py-[6px] rounded-full shrink-0 ${isThisLineAllergy ? "bg-[#f8e1e1]" : "bg-[#f9eacf]"}`}>
-                            <div className="relative size-[6px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={isThisLineAllergy ? imgIndicator : imgIndicator2} /></div>
-                            <p className={`font-['Inter:Bold'] font-bold text-[12px] whitespace-nowrap ${isThisLineAllergy ? "text-[#b23a3a]" : "text-[#b06a16]"}`}>{isThisLineAllergy ? "Allergy note" : "On stove"}</p>
-                          </div>
+                          <span className="rounded-full bg-[#f0ece5] px-2 py-1 text-[11px] text-[#575b54]">Order item</span>
                         </div>
                       );
                     })}
@@ -440,29 +495,19 @@ export default function KitchenApp({ propertyId }: { propertyId?: string }) {
                   )}
                 </div>
 
-                {/* Status activity + station */}
+                {/* Live database status; no fabricated event history or station assignment. */}
                 <div className="flex flex-col gap-3 items-start shrink-0 w-[260px]">
-                  <p className="font-['Inter:Extra_Bold'] font-extrabold text-[#8a8d86] text-[12px] uppercase">Status activity</p>
-                  <div className="bg-white border border-[#ded9d0] border-solid flex flex-col gap-[14px] items-start p-4 rounded-[12px] w-full">
-                    {[
-                      { label: "Order received", time: "7:18 PM · System", dot: imgStatusMarker2 },
-                      { label: "Accepted", time: "7:19 PM · Maya", dot: imgStatusMarker2 },
-                      { label: "Cooking started", time: "7:21 PM · Luis", dot: imgStatusMarker2 },
-                      { label: "Last update", time: "7:26 PM · Hot line", dot: imgStatusMarker1 },
-                    ].map(ev => (
-                      <div key={ev.label} className="flex gap-[10px] items-start w-full">
-                        <div className="relative shrink-0 size-[9px] mt-[3px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={ev.dot} /></div>
-                        <div className="flex flex-col gap-[3px] items-start">
-                          <p className="font-['Inter:Regular'] font-normal text-[#20231f] text-[13px]">{ev.label}</p>
-                          <p className="font-['Inter:Regular'] font-normal text-[#575b54] text-[11px]">{ev.time}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="bg-[#e1eef1] flex flex-col gap-[7px] items-start p-4 rounded-[12px] w-full">
-                    <p className="font-['Inter:Extra_Bold'] font-extrabold text-[#356a7a] text-[10px] uppercase">Assigned station</p>
-                    <p className="font-['DM_Sans:ExtraBold'] font-extrabold text-[#20231f] text-[18px]" style={{ fontVariationSettings: '"opsz" 14' }}>Hot line · Pasta</p>
-                    <p className="font-['Inter:Regular'] font-normal text-[#575b54] text-[11px]">Luis M. · Maya R.</p>
+                  <p className="font-['Inter:Extra_Bold'] font-extrabold text-[#8a8d86] text-[12px] uppercase">Live order details</p>
+                  <div className="bg-white border border-[#ded9d0] border-solid flex flex-col gap-3 items-start p-4 rounded-[12px] w-full">
+                    <div>
+                      <p className="text-[10px] uppercase text-[#8a8d86]">Current status</p>
+                      <p className="mt-1 font-semibold capitalize">{selectedTicket.lane}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase text-[#8a8d86]">Order created</p>
+                      <p className="mt-1 text-sm">{selectedTicket.time}</p>
+                    </div>
+                    <p className="text-xs text-[#777b73]">Station assignment and status history are not stored in the current database schema.</p>
                   </div>
                 </div>
               </div>
@@ -471,16 +516,9 @@ export default function KitchenApp({ propertyId }: { propertyId?: string }) {
               <div className="flex gap-3 items-start w-full flex-wrap">
                 <button onClick={() => advance(selectedTicket.id)} className="bg-[#b44b2a] border border-[#b44b2a] border-solid flex flex-1 gap-2 h-[46px] items-center justify-center min-w-[160px] px-4 rounded-[12px] hover:opacity-90 transition-opacity">
                   <div className="relative size-[17px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgCheck} /></div>
-                  <p className="font-['Inter:Regular'] font-normal text-[14px] text-white whitespace-nowrap">Mark order ready</p>
+                  <p className="font-['Inter:Regular'] font-normal text-[14px] text-white whitespace-nowrap">{selectedTicket.lane === "new" ? "Accept order" : selectedTicket.lane === "preparing" ? "Mark order ready" : "Mark served"}</p>
                 </button>
-                <button className="bg-[#fbf8f3] border border-[#ded9d0] border-solid flex gap-2 h-[46px] items-center justify-center px-4 rounded-[12px] hover:bg-white transition-colors">
-                  <div className="relative size-[17px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgMessageSquare2} /></div>
-                  <p className="font-['Inter:Regular'] font-normal text-[#20231f] text-[14px] whitespace-nowrap">Add kitchen note</p>
-                </button>
-                <button className="bg-[#fbf8f3] border border-[#ded9d0] border-solid flex gap-2 h-[46px] items-center justify-center px-4 rounded-[12px] hover:bg-white transition-colors">
-                  <div className="relative size-[17px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgPrinter} /></div>
-                  <p className="font-['Inter:Regular'] font-normal text-[#20231f] text-[14px] whitespace-nowrap">Reprint ticket</p>
-                </button>
+
               </div>
             </div>
           </div>

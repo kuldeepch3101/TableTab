@@ -88,9 +88,9 @@ Anonymous customers interact through the Edge Function using a QR/session token.
 
 Do not expose `SUPABASE_SERVICE_ROLE_KEY` in `.env` files shipped to the browser, GitHub, Vite code, or QR links.
 
-## 6. Important existing UI limitation
+## 6. Live admin dashboard data
 
-The admin dashboard still contains several presentation/demo statistics and static table cards. The backend is ready for the real data, but those individual dashboard screens need to be wired to their corresponding endpoints if you want every number/card to be live.
+The admin dashboard reads its overview metrics, tables, orders, menu items, restaurant details, and payment records from Supabase through the Edge Function. It refreshes automatically every 15 seconds. Empty database tables are shown as empty states rather than being filled with sample records. Service hours, tax settings, and notification preferences are not yet part of the database schema and are therefore not presented as editable settings.
 
 ## 7. Optional demo accounts
 
@@ -119,9 +119,9 @@ QR customers must authenticate before a dining session is created. The authentic
 
 The customer app polls the session orders endpoint every 2.5 seconds so kitchen status changes are reflected in the customer's order screen. The kitchen display polls the property's orders every 2.5 seconds and writes status changes back through the server API. Both views therefore read/write the same PostgreSQL order records.
 
-## Operational demo-data cleanup
+## Operational and demo-data cleanup
 
-Migration `20260930170200_customer_accounts_cleanup.sql` removes prototype operational records from payments, service requests, order items, orders, and dining sessions and resets active table statuses to `available`. It intentionally preserves organizations, properties, staff memberships, menu categories, and menu items.
+Migration `20260930170200_customer_accounts_cleanup.sql` removes prototype operational records from payments, service requests, order items, orders, and dining sessions and resets active table statuses to `available`. It preserves properties and menu records. Migration `20261014190000_remove_demo_restaurants.sql` removes only the two fixed demo properties seeded by the original migration (`Saffron & Ember` and `The Grand Palms`) and their dependent demo records. Real properties created through the application are not targeted. Review this cleanup before applying it to a database where you intentionally kept those two demo restaurants.
 
 Apply the migration after the previous two migrations:
 
@@ -151,3 +151,21 @@ Customer test:
 Customer signup sends a real Supabase verification email. Set `VITE_AUTH_REDIRECT_URL` to the public HTTPS URL of the deployed TableTaap frontend, for example `https://app.example.com`. Do not put the service-role key in any `VITE_` variable. For local development the redirect defaults to `http://localhost:5173`.
 
 In Supabase, add the same URL under Authentication -> URL Configuration -> Redirect URLs. Keep the production URL exact (and add a wildcard only when you intentionally support paths). After the customer clicks the email confirmation link, TableTaap consumes the Supabase access token and restores the customer session.
+
+## Google sign-in/sign-up email notifications
+
+After a user returns successfully from Google OAuth, TableTab calls the authenticated `/auth-notification` endpoint. The Edge Function validates the Supabase access token and sends a security notification to the email address belonging to that authenticated account. New accounts receive an account-created email; returning users receive a new-sign-in alert. Email failures do not block login.
+
+Configure Brevo and verify the sender address/domain, then set these secrets for the deployed Supabase Edge Function (never in Vite/frontend variables):
+
+```powershell
+npx supabase secrets set BREVO_API_KEY=YOUR_BREVO_API_KEY 'AUTH_EMAIL_FROM=TableTab Security <your-verified-sender@example.com>'
+npx supabase functions deploy make-server-d1e98025
+```
+
+Replace the example key and sender with your actual Brevo API key and a sender address verified in Brevo. This notification flow currently covers Google OAuth sign-in/sign-up; Supabase's own email confirmation flow continues to handle email/password customer signup.
+
+
+## Dashboard data policy
+
+The admin, kitchen, and customer views should use Supabase records. The login screen no longer provides demo-account shortcuts or a hardcoded restaurant list. Customer payment is not marked paid locally; a bill request remains pending until a real payment workflow updates the database. Kitchen completed-today counts are calculated from actual order records.

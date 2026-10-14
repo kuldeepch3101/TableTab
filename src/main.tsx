@@ -17,11 +17,19 @@ function Root() {
   useEffect(() => {
     // Supabase email verification redirects back with an access token in the URL hash.
     // Consume it before restoring the authenticated user.
-    consumeAuthCallback();
-    getCurrentUser()
+    (async () => {
+      await consumeAuthCallback();
+      return getCurrentUser();
+    })()
       .then(me => {
         const email = me.user?.email ?? me.profile?.email ?? "";
-        if (me.memberships?.length) setAuth({ role: "staff", hotel: me.memberships[0].property_id, email });
+        if (me.memberships?.length) {
+          setAuth({ role: "staff", hotel: me.memberships[0].property_id, email });
+        } else if (localStorage.getItem("tabletab:access-token")) {
+          // OAuth/customer accounts may not have a staff property membership.
+          // Keep the authenticated customer in the app; QR context is handled below.
+          setAuth({ role: "customer", email });
+        }
       })
       .catch(() => {})
       .finally(() => setRestoring(false));
@@ -29,29 +37,64 @@ function Root() {
 
   function handleLogout() { clearAccessToken(); setAuth(null); }
 
-  // Table QR codes use links such as /?hotel=saffron&table=12. A valid
-  // scanned link opens the customer menu immediately—no login required.
+  // Table QR codes use links such as /?hotel=saffron&token=...
+  // The QR identifies the table/session; the customer still signs in before
+  // entering the customer app.
   if (restoring) return <div className="min-h-screen w-full bg-[#f3f0ea] flex items-center justify-center text-[#575b54] font-['Inter:Regular'] text-sm">Loading your TableTab account…</div>;
 
   const params = new URLSearchParams(window.location.search);
-  const scannedHotel = getHotels().find(h => h.id === params.get('hotel'));
-  const scannedTableValue = params.get('table')?.trim() ?? '';
+  const scannedHotelId = params.get('hotel')?.trim() ?? '';
   const scannedToken = params.get('token')?.trim() ?? "";
+  const scannedHotel = getHotels().find(h => h.id === scannedHotelId) ?? (scannedToken && scannedHotelId ? {
+    id: scannedHotelId,
+    name: "TableTab",
+    organization: "",
+    cuisine: "Restaurant dining",
+    tables: 0,
+    domain: "",
+    color: "#b44b2a",
+  } : undefined);
+  const scannedTableValue = params.get('table')?.trim() ?? '';
   const scannedTable = /^(?:[1-9]|[1-9]\d)$/.test(scannedTableValue)
     ? scannedTableValue.padStart(2, '0')
     : null;
 
-  if (scannedHotel && (scannedTable || scannedToken) && !auth) {
+  const hasQrContext = Boolean(scannedHotel && (scannedTable || scannedToken));
+
+  // A QR scan always enters the customer authentication flow. This also
+  // prevents an already-signed-in staff account from accidentally opening
+  // the staff dashboard when a customer QR is scanned on the same browser.
+  if (hasQrContext && auth?.role !== "customer") {
     return <LoginScreen onLogin={r => setAuth(r)} customerOnly qrHotel={scannedHotel} />;
   }
 
-  if (scannedHotel && (scannedTable || scannedToken) && auth?.role === "customer") {
+  if (hasQrContext && auth?.role === "customer") {
     return <App hotel={scannedHotel} table={scannedTable || undefined} />;
   }
 
   if (!auth) return <LoginScreen onLogin={r => setAuth(r)} />;
 
-  const hotel = getHotels().find(h => h.id === auth.hotel);
+  // OAuth customers without a table QR choose the restaurant after signing in.
+  if (auth.role === "customer" && !auth.hotel && !hasQrContext) {
+    return <LoginScreen onLogin={r => setAuth(r)} initialCustomerEmail={auth.email} />;
+  }
+
+  // Staff memberships store the real Supabase property UUID. The demo
+  // hotel list uses slugs such as "saffron", so keep the UUID as the
+  // propertyId passed to Admin/Kitchen instead of dropping it.
+  const hotel = getHotels().find(h => h.id === auth.hotel) ?? (
+    auth.hotel
+      ? {
+          id: auth.hotel,
+          name: "TableTab Restaurant",
+          organization: "",
+          cuisine: "Restaurant dining",
+          tables: 0,
+          domain: "",
+          color: "#b44b2a",
+        }
+      : undefined
+  );
 
   // ── Customer ──────────────────────────────────────────────────
   if (auth.role === 'customer') {
@@ -125,3 +168,4 @@ window.__ttRoot = root;
 root.render(<React.StrictMode><Root /></React.StrictMode>);
 
 if (import.meta.hot) import.meta.hot.accept();
+

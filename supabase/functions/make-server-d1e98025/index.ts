@@ -79,6 +79,85 @@ app.get(`${base}/properties`, async (c) => {
   return c.json({ properties: data ?? [] });
 });
 
+app.post(`${base}/auth-notification`, async (c) => {
+  try {
+    const session = await getUser(c);
+    if (!session) return jsonError(c, "Authentication required", 401);
+
+    const email = session.user.email;
+    if (!email) return jsonError(c, "Authenticated account has no email address", 400);
+
+    const brevoApiKey = Deno.env.get("BREVO_API_KEY");
+    const fromSetting = Deno.env.get("AUTH_EMAIL_FROM");
+    if (!brevoApiKey || !fromSetting) {
+      console.error("Missing BREVO_API_KEY or AUTH_EMAIL_FROM.");
+      return jsonError(c, "Email notifications are not configured on the server", 503);
+    }
+
+    const senderMatch = fromSetting.match(/^(.*?)\s*<([^<>]+)>$/);
+    const senderName = senderMatch?.[1]?.trim() || "TableTab Security";
+    const senderEmail = senderMatch?.[2]?.trim() || fromSetting.trim();
+
+    const createdAt = Date.parse(session.user.created_at ?? "");
+    const lastSignInAt = Date.parse(session.user.last_sign_in_at ?? "");
+    const isNewAccount = Number.isFinite(createdAt) && Number.isFinite(lastSignInAt) &&
+      Math.abs(createdAt - lastSignInAt) < 2 * 60 * 1000;
+    const subject = isNewAccount ? "Welcome to TableTab" : "New sign-in to your TableTab account";
+    const description = isNewAccount
+      ? "Your TableTab account was created successfully using Google."
+      : "A sign-in to your TableTab account was detected. If this was you, no action is needed.";
+    const timestamp = new Date().toUTCString();
+    const safeEmail = email.replace(/[&<>\"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[char] ?? char));
+    const html = `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#292929"><h2>${subject}</h2><p>${description}</p><p><b>Account:</b> ${safeEmail}</p><p><b>Time:</b> ${timestamp}</p><p>If you don't recognize this activity, secure your Google account and contact your administrator.</p><p>— TableTab</p></div>`;
+
+    const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: { "api-key": brevoApiKey, "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ sender: { name: senderName, email: senderEmail }, to: [{ email }], subject, htmlContent: html }),
+    });
+
+    if (!response.ok) {
+      console.error("Brevo auth notification failed:", response.status, await response.text());
+      return jsonError(c, "Unable to send sign-in notification email", 502);
+    }
+    return c.json({ sent: true });
+  } catch (error) {
+    console.error("Auth notification error:", error);
+    return jsonError(c, "Unexpected error sending notification email", 500);
+  }
+});
+
+app.get(`${base}/property/:propertyId`, async (c) => {
+  const propertyId = c.req.param("propertyId");
+  const auth = await requireStaff(c, propertyId);
+  if (auth.error) return auth.error;
+
+  const { data, error } = await admin
+    .from("properties")
+    .select("id,name,slug,cuisine,table_count,color,is_active,phone,address,email_domain,currency_code,timezone")
+    .eq("id", propertyId)
+    .maybeSingle();
+
+  if (error) return jsonError(c, error.message, 500);
+  if (!data) return jsonError(c, "Restaurant property not found", 404);
+  return c.json({ property: data });
+});
+
+app.get(`${base}/payments/:propertyId`, async (c) => {
+  const propertyId = c.req.param("propertyId");
+  const auth = await requireStaff(c, propertyId);
+  if (auth.error) return auth.error;
+
+  const { data, error } = await admin
+    .from("payments")
+    .select("id,amount,currency_code,method,status,paid_at,created_at,dining_sessions(guest_count,table_id,dining_tables(table_number,display_name))")
+    .eq("property_id", propertyId)
+    .order("created_at", { ascending: false });
+
+  if (error) return jsonError(c, error.message, 500);
+  return c.json({ payments: data ?? [] });
+});
+
 app.get(`${base}/me`, async (c) => {
   const session = await getUser(c);
   if (!session) return jsonError(c, "Authentication required", 401);
@@ -148,6 +227,78 @@ app.get(`${base}/menu/:propertyId`, async (c) => {
   } catch (e) { console.error(e); return jsonError(c, "Unable to load menu", 500); }
 });
 
+app.get(`${base}/menu-categories/:propertyId`, async (c) => {
+  const propertyId = c.req.param("propertyId");
+  const auth = await requireStaff(c, propertyId, ["owner", "admin", "manager"]);
+  if (auth.error) return auth.error;
+
+  const { data, error } = await admin
+    .from("menu_categories")
+    .select("id,name,sort_order")
+    .eq("property_id", propertyId)
+    .eq("is_active", true)
+    .order("sort_order")
+    .order("name");
+
+  if (error) {
+    console.error("Unable to load menu categories:", error);
+    return jsonError(c, "Unable to load menu categories", 500);
+  }
+  return c.json({ categories: data ?? [] });
+});
+
+app.post(`${base}/menu/:propertyId`, async (c) => {
+  const propertyId = c.req.param("propertyId");
+  const auth = await requireStaff(c, propertyId, ["owner", "admin", "manager"]);
+  if (auth.error) return auth.error;
+
+  try {
+    const body = await c.req.json();
+    const name = String(body.name ?? "").trim();
+    const description = String(body.description ?? "").trim();
+    const categoryId = String(body.categoryId ?? "").trim();
+    const imageUrl = String(body.imageUrl ?? "").trim();
+    const dietaryBadge = String(body.dietaryBadge ?? "").trim();
+    const price = Number(body.price);
+
+    if (!name || name.length > 120) return jsonError(c, "Dish name is required and must be at most 120 characters");
+    if (!Number.isFinite(price) || price < 0) return jsonError(c, "Enter a valid non-negative price");
+    if (!categoryId) return jsonError(c, "Please select a menu category");
+    if (description.length > 1000) return jsonError(c, "Description must be 1000 characters or fewer");
+    if (imageUrl && !/^https:\/\/.+/i.test(imageUrl)) return jsonError(c, "Image URL must use HTTPS");
+
+    const { data: category, error: categoryError } = await admin
+      .from("menu_categories")
+      .select("id")
+      .eq("id", categoryId)
+      .eq("property_id", propertyId)
+      .eq("is_active", true)
+      .maybeSingle();
+    if (categoryError) throw categoryError;
+    if (!category) return jsonError(c, "Selected category does not belong to this restaurant", 400);
+
+    const badgeLower = dietaryBadge.toLowerCase();
+    const { data, error } = await admin.from("menu_items").insert({
+      property_id: propertyId,
+      category_id: categoryId,
+      name,
+      description: description || null,
+      price,
+      image_url: imageUrl || null,
+      dietary_badge: dietaryBadge || null,
+      is_vegetarian: ["veg", "vegetarian", "jain"].includes(badgeLower),
+      is_vegan: badgeLower === "vegan",
+      is_available: true,
+    }).select("id,name,description,price,image_url,dietary_badge,is_available").single();
+
+    if (error) throw error;
+    return c.json({ item: data }, 201);
+  } catch (error) {
+    console.error("Unable to create menu item:", error);
+    return jsonError(c, error instanceof Error ? error.message : "Unable to create menu item", 500);
+  }
+});
+
 app.get(`${base}/tables/:propertyId`, async (c) => {
   const auth = await requireStaff(c, c.req.param("propertyId"));
   if (auth.error) return auth.error;
@@ -159,7 +310,7 @@ app.get(`${base}/tables/:propertyId`, async (c) => {
 app.get(`${base}/orders/:propertyId`, async (c) => {
   const auth = await requireStaff(c, c.req.param("propertyId"));
   if (auth.error) return auth.error;
-  const { data, error } = await admin.from("orders").select("*,order_items(*),dining_sessions(guest_count,table_id,dining_tables(table_number))").eq("property_id", c.req.param("propertyId")).order("placed_at", { ascending: false });
+  const { data, error } = await admin.from("orders").select("*,order_items(*),dining_sessions(guest_count,table_id,dining_tables(table_number,display_name))").eq("property_id", c.req.param("propertyId")).order("placed_at", { ascending: false });
   if (error) return jsonError(c, error.message, 500);
   return c.json({ orders: (data ?? []).map(mapOrder) });
 });
@@ -167,7 +318,7 @@ app.get(`${base}/orders/:propertyId`, async (c) => {
 app.get(`${base}/orders/:propertyId/:orderId`, async (c) => {
   const auth = await requireStaff(c, c.req.param("propertyId"));
   if (auth.error) return auth.error;
-  const { data, error } = await admin.from("orders").select("*,order_items(*),dining_sessions(guest_count,table_id,dining_tables(table_number))").eq("property_id", c.req.param("propertyId")).eq("id", c.req.param("orderId")).maybeSingle();
+  const { data, error } = await admin.from("orders").select("*,order_items(*),dining_sessions(guest_count,table_id,dining_tables(table_number,display_name))").eq("property_id", c.req.param("propertyId")).eq("id", c.req.param("orderId")).maybeSingle();
   if (error) return jsonError(c, error.message, 500);
   if (!data) return jsonError(c, "Order not found", 404);
   return c.json({ order: mapOrder(data) });
@@ -180,7 +331,7 @@ app.patch(`${base}/orders/:propertyId/:orderId`, async (c) => {
   const updates: Record<string, unknown> = {};
   if (body.status) updates.status = body.status;
   if (body.orderNote !== undefined) updates.order_note = String(body.orderNote).slice(0, 500);
-  const { data, error } = await admin.from("orders").update(updates).eq("property_id", c.req.param("propertyId")).eq("id", c.req.param("orderId")).select("*,order_items(*),dining_sessions(guest_count,table_id,dining_tables(table_number))").single();
+  const { data, error } = await admin.from("orders").update(updates).eq("property_id", c.req.param("propertyId")).eq("id", c.req.param("orderId")).select("*,order_items(*),dining_sessions(guest_count,table_id,dining_tables(table_number,display_name))").single();
   if (error) return jsonError(c, error.message, 400);
   return c.json({ order: mapOrder(data) });
 });
@@ -237,7 +388,7 @@ app.post(`${base}/orders`, async (c) => {
     if (orderError) throw orderError;
     const { error: itemError } = await admin.from("order_items").insert(items.map((i: any) => ({ ...i, order_id: order.id })));
     if (itemError) throw itemError;
-    const { data: full } = await admin.from("orders").select("*,order_items(*),dining_sessions(guest_count,table_id,dining_tables(table_number))").eq("id", order.id).single();
+    const { data: full } = await admin.from("orders").select("*,order_items(*),dining_sessions(guest_count,table_id,dining_tables(table_number,display_name))").eq("id", order.id).single();
     return c.json({ order: mapOrder(full) }, 201);
   } catch (e) { console.error(e); return jsonError(c, e instanceof Error ? e.message : "Unable to create order", 400); }
 });
@@ -252,7 +403,7 @@ app.get(`${base}/public/orders/:sessionToken`, async (c) => {
       return jsonError(c, "This dining session belongs to another customer", 403);
     }
     const { data, error } = await admin.from("orders")
-      .select("*,order_items(*),dining_sessions(guest_count,table_id,dining_tables(table_number))")
+      .select("*,order_items(*),dining_sessions(guest_count,table_id,dining_tables(table_number,display_name))")
       .eq("dining_session_id", session.id)
       .order("placed_at", { ascending: false });
     if (error) throw error;
@@ -297,6 +448,7 @@ function mapOrder(row: any) {
     status: row.status,
     guests: row.dining_sessions?.guest_count ?? null,
     tableNumber: row.dining_sessions?.dining_tables?.table_number ?? null,
+    tableName: row.dining_sessions?.dining_tables?.display_name ?? null,
     items: (row.order_items ?? []).map((i: any) => ({ menuItemId: i.menu_item_id, name: i.item_name, quantity: i.quantity, unitPrice: Number(i.unit_price), spiceLevel: i.spice_level, note: i.special_instructions })),
     orderNote: row.order_note,
     subtotal: Number(row.subtotal),
