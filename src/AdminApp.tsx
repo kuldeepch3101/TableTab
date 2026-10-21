@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
-import { getCurrentUser, getMenu, getOrders, getPayments, getProperty, getTables, updateOrder, getMenuCategories, uploadMenuPhoto, createMenuItem } from "./lib/tabletabApi";
+import { getCurrentUser, getMenu, getOrders, getPayments, getProperty, getTables, updateOrder, getMenuCategories, uploadMenuPhoto, createMenuItem, getServiceRequests, updateServiceRequest } from "./lib/tabletabApi";
 import type { DatabaseMenuItem, DatabaseOrder, MenuCategory } from "./lib/tabletabApi";
 
 type Screen = "overview" | "tables" | "orders" | "menu" | "billing" | "settings";
 type AnyRecord = Record<string, any>;
+type ServiceRequest = { id: string; request_type: string; message: string | null; status: "open" | "acknowledged" | "completed" | "cancelled"; requested_at: string; completed_at: string | null; dining_sessions?: { guest_count: number | null; dining_tables?: { table_number: string; display_name: string | null } | null } | null };
 
 const NAV: Array<{ id: Screen; label: string }> = [
   { id: "overview", label: "Overview" },
@@ -44,6 +45,11 @@ export default function AdminApp({ propertyId }: { propertyId?: string }) {
   const [menuPhoto, setMenuPhoto] = useState<File | null>(null);
   const [menuForm, setMenuForm] = useState({ name: "", description: "", price: "", categoryId: "", dietaryBadge: "Veg" });
   const [payments, setPayments] = useState<AnyRecord[]>([]);
+  const [serviceRequests, setServiceRequests] = useState<ServiceRequest[]>([]);
+  const [showBillRequests, setShowBillRequests] = useState(false);
+  const [activeBillAlert, setActiveBillAlert] = useState<ServiceRequest | null>(null);
+  const [seenBillRequestIds, setSeenBillRequestIds] = useState<string[]>([]);
+  const [requestError, setRequestError] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -70,6 +76,19 @@ export default function AdminApp({ propertyId }: { propertyId?: string }) {
       setMenu(menuRows ?? []);
       setMenuCategories(categoryRows ?? []);
       setPayments(paymentRows ?? []);
+      // Bill requests load independently so a request endpoint issue never blocks the core dashboard.
+      try {
+        const requests = await getServiceRequests(propertyId);
+        setServiceRequests(requests ?? []);
+        setRequestError("");
+        const newestOpenBill = (requests ?? []).find((r: ServiceRequest) => r.request_type === "bill" && r.status === "open" && !seenBillRequestIds.includes(r.id));
+        if (newestOpenBill) {
+          setActiveBillAlert(newestOpenBill);
+          setSeenBillRequestIds(prev => prev.includes(newestOpenBill.id) ? prev : [...prev, newestOpenBill.id]);
+        }
+      } catch (requestFailure) {
+        setRequestError(requestFailure instanceof Error ? requestFailure.message : "Unable to load bill requests.");
+      }
       setError("");
       setLastUpdated(new Date());
     } catch (e) {
@@ -77,7 +96,7 @@ export default function AdminApp({ propertyId }: { propertyId?: string }) {
     } finally {
       setLoading(false);
     }
-  }, [propertyId]);
+  }, [propertyId, seenBillRequestIds]);
 
   useEffect(() => {
     refresh();
@@ -123,6 +142,18 @@ export default function AdminApp({ propertyId }: { propertyId?: string }) {
   const activeOrders = orders.filter(o => ["new", "preparing", "ready"].includes(o.status));
   const activeCount = (status: string) => activeOrders.filter(o => o.status === status).length;
   const recentOrders = [...orders].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 6);
+
+  async function changeServiceRequest(request: ServiceRequest, status: ServiceRequest["status"]) {
+    if (!propertyId) return;
+    try {
+      const updated = await updateServiceRequest(propertyId, request.id, status);
+      setServiceRequests(prev => prev.map(item => item.id === request.id ? updated : item));
+      if (activeBillAlert?.id === request.id) setActiveBillAlert(null);
+      setRequestError("");
+    } catch (e) {
+      setRequestError(e instanceof Error ? e.message : "Unable to update bill request.");
+    }
+  }
 
   async function changeStatus(order: DatabaseOrder, status: DatabaseOrder["status"]) {
     if (!propertyId) return;
@@ -185,9 +216,10 @@ export default function AdminApp({ propertyId }: { propertyId?: string }) {
     </aside>
 
     <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-      <PageTitle title={NAV.find(n => n.id === screen)?.label || "Overview"} subtitle={`${property?.name || "Your restaurant"} · ${lastUpdated ? `Last synced ${lastUpdated.toLocaleTimeString()}` : "Connecting to Supabase…"}`} right={<button onClick={() => refresh()} className="rounded-lg bg-[#b44b2a] px-4 py-2 text-sm font-semibold text-white">Refresh data</button>} />
+      <PageTitle title={NAV.find(n => n.id === screen)?.label || "Overview"} subtitle={`${property?.name || "Your restaurant"} · ${lastUpdated ? `Last synced ${lastUpdated.toLocaleTimeString()}` : "Connecting to Supabase…"}`} right={<div className="flex items-center gap-2"><button onClick={() => setShowBillRequests(true)} className="relative rounded-lg border border-[#ded9d0] bg-white px-4 py-2 text-sm font-semibold text-[#20231f]">Bill requests {serviceRequests.filter(r => r.request_type === "bill" && ["open", "acknowledged"].includes(r.status)).length > 0 && <span className="ml-1 inline-flex min-w-5 items-center justify-center rounded-full bg-[#b44b2a] px-1.5 py-0.5 text-xs text-white">{serviceRequests.filter(r => r.request_type === "bill" && ["open", "acknowledged"].includes(r.status)).length}</span>}</button><button onClick={() => refresh()} className="rounded-lg bg-[#b44b2a] px-4 py-2 text-sm font-semibold text-white">Refresh data</button></div>} />
       <div className="flex flex-1 flex-col gap-5 overflow-y-auto p-5 md:p-6">
         {error && <ErrorNotice message={error} />}
+        {requestError && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">Bill requests could not be refreshed: {requestError}</div>}
         {loading && <Panel><p className="text-sm text-[#777b73]">Loading real data from Supabase…</p></Panel>}
 
         {!loading && screen === "overview" && <>
@@ -231,6 +263,8 @@ export default function AdminApp({ propertyId }: { propertyId?: string }) {
 
         {!loading && screen === "settings" && <Panel><h2 className="mb-4 text-lg font-bold">Restaurant details from Supabase</h2>{property ? <div className="grid gap-4 sm:grid-cols-2">{[["Name",property.name],["Cuisine",property.cuisine],["Phone",property.phone],["Address",property.address],["Email domain",property.email_domain],["Currency",property.currency_code],["Timezone",property.timezone],["Configured table count",property.table_count]].map(([label,value]) => <div key={label} className="rounded-lg bg-[#f8f6f1] p-4"><p className="text-xs uppercase text-[#777b73]">{label}</p><p className="mt-1 break-words font-semibold">{value || "Not configured"}</p></div>)}</div> : <p className="text-sm text-[#777b73]">No restaurant property details were returned for this account.</p>}<p className="mt-5 rounded-lg bg-[#fff5e8] p-3 text-sm text-[#8a5a18]">Service hours, tax rates, notification preferences, and payment-provider settings are not stored in the current database schema. They are not shown as editable mock settings.</p></Panel>}
       </div>
+      {activeBillAlert && <div className="fixed bottom-5 right-5 z-[70] w-[min(92vw,390px)] rounded-2xl border border-[#b44b2a]/30 bg-white p-5 shadow-2xl" role="alertdialog" aria-live="assertive"><div className="flex items-start gap-3"><div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#fff0e9] text-xl">🧾</div><div className="min-w-0 flex-1"><p className="font-bold text-[#20231f]">New bill request</p><p className="mt-1 text-sm text-[#575b54]">{activeBillAlert.dining_sessions?.dining_tables?.display_name || `Table ${activeBillAlert.dining_sessions?.dining_tables?.table_number || "—"}`}</p><p className="mt-1 text-xs text-[#777b73]">Requested {when(activeBillAlert.requested_at)}</p></div><button aria-label="Dismiss notification" onClick={() => setActiveBillAlert(null)} className="rounded-md px-2 text-[#777b73]">✕</button></div><div className="mt-4 flex gap-2"><button onClick={() => { setShowBillRequests(true); setActiveBillAlert(null); }} className="flex-1 rounded-lg bg-[#b44b2a] px-3 py-2 text-sm font-semibold text-white">View request</button><button onClick={() => changeServiceRequest(activeBillAlert, "acknowledged")} className="rounded-lg border border-[#ded9d0] px-3 py-2 text-sm font-semibold">Acknowledge</button></div></div>}
+      {showBillRequests && <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/50 p-4" onClick={() => setShowBillRequests(false)}><section role="dialog" aria-modal="true" aria-label="Bill requests" className="max-h-[85vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl" onClick={event => event.stopPropagation()}><div className="mb-4 flex items-start justify-between gap-3"><div><h2 className="text-xl font-bold text-[#20231f]">Bill requests</h2><p className="mt-1 text-sm text-[#777b73]">Requests are saved in Supabase and refreshed every 15 seconds.</p></div><button onClick={() => setShowBillRequests(false)} className="rounded-lg border border-[#ded9d0] px-3 py-2">Close</button></div>{serviceRequests.filter(r => r.request_type === "bill").length ? <div className="space-y-3">{serviceRequests.filter(r => r.request_type === "bill").map(request => <article key={request.id} className="rounded-xl border border-[#ded9d0] p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-bold">{request.dining_sessions?.dining_tables?.display_name || `Table ${request.dining_sessions?.dining_tables?.table_number || "—"}`}</p><p className="mt-1 text-xs text-[#777b73]">Requested {when(request.requested_at)} · Guests: {request.dining_sessions?.guest_count ?? "—"}</p>{request.message && <p className="mt-2 text-sm">{request.message}</p>}</div><Pill>{request.status}</Pill></div>{request.status !== "completed" && request.status !== "cancelled" && <div className="mt-3 flex flex-wrap gap-2">{request.status === "open" && <button onClick={() => changeServiceRequest(request, "acknowledged")} className="rounded-lg border border-[#ded9d0] px-3 py-2 text-sm font-semibold">Acknowledge</button>}<button onClick={() => changeServiceRequest(request, "completed")} className="rounded-lg bg-[#b44b2a] px-3 py-2 text-sm font-semibold text-white">Mark handled</button></div>}</article>)}</div> : <p className="rounded-xl bg-[#f8f6f1] p-6 text-center text-sm text-[#777b73]">No bill requests have been recorded for this restaurant yet.</p>}<div className="mt-4 flex justify-end"><button onClick={() => refresh(true)} className="rounded-lg border border-[#ded9d0] px-4 py-2 text-sm font-semibold">Refresh requests</button></div></section></div>}
       {showQr && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setShowQr(false)}>
         <section role="dialog" aria-modal="true" aria-label="Table QR code" className="flex max-h-[90vh] w-full max-w-2xl flex-col gap-5 overflow-y-auto rounded-2xl border border-[#ded9d0] bg-white p-6 shadow-2xl" onClick={event => event.stopPropagation()}>
           <div className="flex items-start justify-between gap-4"><div><h2 className="text-xl font-bold">Table QR code</h2><p className="mt-1 text-sm text-[#777b73]">Print this QR code and place it on the selected table.</p></div><button onClick={() => setShowQr(false)} className="rounded-lg border border-[#ded9d0] px-3 py-2" aria-label="Close QR code">✕</button></div>

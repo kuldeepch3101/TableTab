@@ -414,6 +414,42 @@ app.get(`${base}/public/orders/:sessionToken`, async (c) => {
   }
 });
 
+// Staff-only list of persistent service and bill requests for a restaurant.
+app.get(`${base}/service-requests/:propertyId`, async (c) => {
+  const propertyId = c.req.param("propertyId");
+  const staff = await requireStaff(c, propertyId);
+  if (staff.error) return staff.error;
+  const { data, error } = await admin.from("service_requests")
+    .select("id,property_id,dining_session_id,request_type,message,status,requested_at,completed_at,dining_sessions(id,guest_count,status,dining_tables(table_number,display_name))")
+    .eq("property_id", propertyId)
+    .order("requested_at", { ascending: false })
+    .limit(100);
+  if (error) return jsonError(c, error.message, 500);
+  return c.json({ requests: data ?? [] });
+});
+
+// Staff can acknowledge or complete only requests belonging to their own property.
+app.patch(`${base}/service-requests/:propertyId/:requestId`, async (c) => {
+  const propertyId = c.req.param("propertyId");
+  const requestId = c.req.param("requestId");
+  const staff = await requireStaff(c, propertyId);
+  if (staff.error) return staff.error;
+  const body = await c.req.json().catch(() => ({}));
+  const status = String(body.status ?? "");
+  if (!["acknowledged", "completed", "cancelled"].includes(status)) {
+    return jsonError(c, "Status must be acknowledged, completed, or cancelled", 400);
+  }
+  const update: Record<string, unknown> = { status };
+  if (status === "completed" || status === "cancelled") update.completed_at = new Date().toISOString();
+  const { data, error } = await admin.from("service_requests").update(update)
+    .eq("id", requestId).eq("property_id", propertyId)
+    .select("id,property_id,dining_session_id,request_type,message,status,requested_at,completed_at,dining_sessions(id,guest_count,status,dining_tables(table_number,display_name))")
+    .maybeSingle();
+  if (error) return jsonError(c, error.message, 500);
+  if (!data) return jsonError(c, "Request not found for this restaurant", 404);
+  return c.json({ request: data });
+});
+
 app.post(`${base}/service-requests`, async (c) => {
   try {
     const body = await c.req.json();

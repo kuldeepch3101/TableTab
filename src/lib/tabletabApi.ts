@@ -240,6 +240,23 @@ export async function createServiceRequest(sessionToken: string, type = "help", 
   return request("/service-requests", { method: "POST", body: JSON.stringify({ sessionToken, type, message }) }, true);
 }
 
+
+export interface DatabaseServiceRequest {
+  id: string; property_id: string; dining_session_id: string; request_type: string; message: string | null;
+  status: "open" | "acknowledged" | "completed" | "cancelled"; requested_at: string; completed_at: string | null;
+  dining_sessions?: { id: string; guest_count: number | null; status: string; dining_tables?: { table_number: string; display_name: string | null } | null } | null;
+}
+export async function getServiceRequests(propertyId: string) {
+  const result = await request<{ requests: DatabaseServiceRequest[] }>(`/service-requests/${encodeURIComponent(propertyId)}`);
+  return result.requests;
+}
+export async function updateServiceRequest(propertyId: string, requestId: string, status: DatabaseServiceRequest["status"]) {
+  const result = await request<{ request: DatabaseServiceRequest }>(`/service-requests/${encodeURIComponent(propertyId)}/${encodeURIComponent(requestId)}`, {
+    method: "PATCH", body: JSON.stringify({ status }),
+  });
+  return result.request;
+}
+
 export async function getPayments(propertyId: string) {
   const result = await request<{ payments: any[] }>(`/payments/${propertyId}`);
   return result.payments;

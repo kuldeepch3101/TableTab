@@ -895,11 +895,7 @@ export default function App({ hotel, table }: AppProps) {
                           {orderStatus === "placed" ? "Your order has been received by TableTab." : "Order progress updates when the kitchen changes the status."}
                         </p>
                       </div>
-                      <div className="rounded-xl border border-[#ded9d0] bg-[#fbf8f3] p-4 w-full">
-                        <p className="text-xs uppercase tracking-wide text-[#8a8d86]">Current database status</p>
-                        <p className="mt-1 font-semibold capitalize text-[#20231f]">{orderStatus === "placed" ? "New" : orderStatus}</p>
-                        <p className="mt-1 text-xs text-[#777b73]">This status updates from the restaurant order record. No estimated timestamps are shown until the backend stores them.</p>
-                      </div>
+                  
                       <div className="bg-white border border-[#ded9d0] border-solid flex flex-col gap-[11px] items-start p-4 rounded-[12px] w-full">
                         <div className="flex items-start justify-between w-full">
                           <p className="font-['Inter:Extra_Bold'] font-extrabold text-[#20231f] text-[14px]">Your order</p>

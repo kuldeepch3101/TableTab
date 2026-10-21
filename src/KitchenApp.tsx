@@ -98,6 +98,7 @@ export default function KitchenApp({ propertyId }: { propertyId?: string }) {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [completedHistory, setCompletedHistory] = useState<Array<{ id: string; loc: string; time: string }>>([]);
   const [completedToday, setCompletedToday] = useState(0);
+  const [servedLast30Min, setServedLast30Min] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [clock, setClock] = useState(new Date());
   const [muted, setMuted] = useState(false);
@@ -120,6 +121,16 @@ export default function KitchenApp({ propertyId }: { propertyId?: string }) {
       console.log("[TableTab][Kitchen] Loading orders for property:", propertyId);
       const orders = await getOrders(propertyId);
       console.log("[TableTab][Kitchen] Orders received:", orders.length, orders);
+
+      // updatedAt is refreshed by the database trigger whenever an order changes.
+      // Count only orders currently served whose last update was in the past 30 minutes.
+      const now = Date.now();
+      const cutoff = now - 30 * 60 * 1000;
+      setServedLast30Min(orders.filter((order: any) => {
+        if (order.status !== "served") return false;
+        const updatedAt = new Date(order.updatedAt).getTime();
+        return Number.isFinite(updatedAt) && updatedAt >= cutoff && updatedAt <= now;
+      }).length);
 
       const mapped = orders.map(mapOrderToTicket);
       setTickets(mapped.filter(t => t.lane !== "completed"));
@@ -416,8 +427,8 @@ export default function KitchenApp({ propertyId }: { propertyId?: string }) {
             ))}
             <div className="bg-[#30342f] flex flex-col gap-[5px] items-start p-3 rounded-[8px] w-full">
               <p className="font-['Inter:Bold'] font-bold text-[10px] text-[rgba(255,255,255,0.45)] uppercase">Last 30 min</p>
-              <p className="font-['DM_Sans:Regular'] font-normal text-[24px] text-white" style={{ fontVariationSettings: '"opsz" 14' }}>11 served</p>
-              <p className="font-['Inter:Regular'] font-normal text-[#8ed3b7] text-[10px]">↑ 18% throughput</p>
+              <p className="font-['DM_Sans:Regular'] font-normal text-[24px] text-white" style={{ fontVariationSettings: '"opsz" 14' }}>{servedLast30Min} served</p>
+              <p className="font-['Inter:Regular'] font-normal text-[#8ed3b7] text-[10px]">Live database count</p>
             </div>
           </div>
         </div>
