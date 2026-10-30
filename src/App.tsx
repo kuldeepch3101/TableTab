@@ -100,7 +100,7 @@ function calcTotals(cart: CartItem[]) {
   return { subtotal, tax, service, total: subtotal + tax + service };
 }
 
-function fmt(n: number) { return `$${n.toFixed(2)}`; }
+function fmt(n: number) { return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(n || 0)); }
 
 interface AppProps {
   hotel?: {
@@ -659,7 +659,7 @@ export default function App({ hotel, table }: AppProps) {
                             </div>
                             <p className="font-['Inter:Regular'] font-normal leading-[1.4] text-[#575b54] text-[12px] w-full">{item.desc}</p>
                             <div className="flex items-end justify-between w-full">
-                              <p className="font-['Inter:Regular'] font-normal text-[#20231f] text-[14px]">${item.price}</p>
+                              <p className="font-['Inter:Regular'] font-normal text-[#20231f] text-[14px]">{new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(item.price || 0))}</p>
                               <button onClick={e => { e.stopPropagation(); addToCart(item, 1, item.id === "biryani" ? "medium" : undefined); }} className="bg-[#b44b2a] flex flex-col items-center justify-center rounded-full size-[30px] hover:opacity-90 transition-opacity">
                                 <div className="relative size-[16px]"><img alt="" className="absolute block inset-0 max-w-none size-full" src={imgPlus1} /></div>
                               </button>

@@ -16,7 +16,7 @@ const NAV: Array<{ id: Screen; label: string }> = [
   { id: "settings", label: "Restaurant settings" },
 ];
 
-const money = (amount: number, currency = "USD") => new Intl.NumberFormat(undefined, { style: "currency", currency }).format(Number(amount || 0));
+const money = (amount: number, currency = "INR") => new Intl.NumberFormat("en-IN", { style: "currency", currency }).format(Number(amount || 0));
 const when = (date?: string) => date ? new Date(date).toLocaleString() : "—";
 const today = () => new Date().toDateString();
 
@@ -131,7 +131,7 @@ export default function AdminApp({ propertyId }: { propertyId?: string }) {
     return () => { cancelled = true; };
   }, [qrLink, showQr]);
 
-  const currency = property?.currency_code || "USD";
+  const currency = "INR";
   const todaysOrders = useMemo(() => orders.filter(o => new Date(o.createdAt).toDateString() === today()), [orders]);
   const todaysPaidPayments = payments.filter(payment =>
     payment.status === "paid" && payment.paid_at && new Date(payment.paid_at).toDateString() === today()
