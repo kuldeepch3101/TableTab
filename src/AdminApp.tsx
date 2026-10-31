@@ -106,7 +106,8 @@ export default function AdminApp({ propertyId }: { propertyId?: string }) {
 
   const qrTable = tables.find((table: AnyRecord) => table.id === qrTableId) ?? tables[0];
   const qrToken = qrTable?.qr_token;
-  const qrPropertyKey = property?.slug || property?.id || propertyId || "";
+  // QR links must carry the Supabase property UUID because main.tsx matches hotels by h.id.
+  const qrPropertyKey = property?.id || propertyId || "";
   const qrLink = qrToken && qrPropertyKey
     ? `${qrBaseUrl.replace(/\/+$/, "")}/?hotel=${encodeURIComponent(qrPropertyKey)}&token=${encodeURIComponent(qrToken)}`
     : "";
